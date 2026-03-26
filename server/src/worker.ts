@@ -168,7 +168,7 @@ export async function runSyncCycle(): Promise<WorkerResult> {
             fecha_publicacion: new Date().toISOString(),
             fecha_cierre: summary.FechaCierre ?? null,
             estado: "Publicada",
-            url: `https://buscador.mercadopublico.cl/ficha?code=${encodeURIComponent(summary.CodigoExterno)}`,
+            url: `https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion=${encodeURIComponent(summary.CodigoExterno)}`,
             region: null,
             categoria: "General",
           });

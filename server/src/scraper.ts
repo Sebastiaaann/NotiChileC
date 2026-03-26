@@ -55,6 +55,7 @@ export interface ScrapedLicitacion {
   fechaPublicacion: string;
   fechaCierre: string;
   organismo: string | null;
+  url: string | null;
 }
 
 function parseHtmlLicitaciones(html: string): ScrapedLicitacion[] {
@@ -118,6 +119,12 @@ function parseHtmlLicitaciones(html: string): ScrapedLicitacion[] {
       /<div class="col-md-4"><strong>([^<]+)<\/strong>/
     );
 
+    // URL real de la ficha: verFicha('http://...')
+    const url = extractRegex(
+      block,
+      /verFicha\('([^']+)'\)/
+    );
+
     results.push({
       codigoExterno: codigo.trim(),
       nombre: nombre ?? "Sin nombre",
@@ -126,6 +133,7 @@ function parseHtmlLicitaciones(html: string): ScrapedLicitacion[] {
       fechaPublicacion,
       fechaCierre,
       organismo: organismo ?? null,
+      url: url ?? null,
     });
   }
 
@@ -185,8 +193,8 @@ export function scrapedToRecord(scraped: ScrapedLicitacion): LicitacionRecord {
     fecha_publicacion: parseFecha(scraped.fechaPublicacion) ?? new Date().toISOString(),
     fecha_cierre: parseFecha(scraped.fechaCierre),
     estado: "Publicada",
-    url: `https://buscador.mercadopublico.cl/ficha?code=${encodeURIComponent(scraped.codigoExterno)}`,
-    region: null, // El scraper no obtiene región
+    url: scraped.url ?? `https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion=${encodeURIComponent(scraped.codigoExterno)}`,
+    region: null,
     categoria: "General",
   };
 }

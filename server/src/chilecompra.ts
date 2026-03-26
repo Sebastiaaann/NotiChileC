@@ -255,7 +255,7 @@ export function mapDetailToRecord(
     fecha_publicacion: fechaPub,
     fecha_cierre: fechaCierre,
     estado: normalizeText(detail.Estado) ?? "Publicada",
-    url: `https://buscador.mercadopublico.cl/ficha?code=${encodeURIComponent(codigo)}`,
+    url: `https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion=${encodeURIComponent(codigo)}`,
     region: normalizeText(detail.Comprador?.RegionUnidad),
     categoria: extractCategoria(detail),
   };
