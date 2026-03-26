@@ -1,0 +1,1 @@
+import { sendPushToAll } from './src/push'; sendPushToAll('Prueba de Push', 'Esto es una prueba de que las notificaciones conectan bien tras el arreglo de red', { test: true }).then(console.log).catch(console.error);

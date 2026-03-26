@@ -38,8 +38,20 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#1E40AF",
+          "defaultChannel": "licitaciones"
+        }
       ]
     ],
+    "extra": {
+      "eas": {
+        "projectId": "c114e493-8d5e-46cf-a7f8-228fd9459599"
+      }
+    },
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
