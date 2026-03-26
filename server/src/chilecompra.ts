@@ -49,6 +49,7 @@ export interface LicitacionRecord {
   organismo_nombre: string | null;
   tipo: string | null;
   monto_estimado: number | null;
+  monto_label: string | null;
   moneda: string;
   fecha_publicacion: string | null;
   fecha_cierre: string | null;
@@ -251,6 +252,7 @@ export function mapDetailToRecord(
     tipo:
       normalizeText(detail.Tipo)?.toUpperCase() ?? deriveTipo(codigo),
     monto_estimado: toNumber(detail.MontoEstimado),
+    monto_label: null, // API tiene monto numérico, label se genera en el cliente
     moneda: normalizeText(detail.Moneda)?.toUpperCase() ?? "CLP",
     fecha_publicacion: fechaPub,
     fecha_cierre: fechaCierre,

@@ -10,6 +10,7 @@ interface LicitacionRow {
   organismo_nombre: string | null;
   tipo: string | null;
   monto_estimado: string | null;
+  monto_label: string | null;
   moneda: string;
   fecha_publicacion: string | null;
   fecha_cierre: string | null;
@@ -32,7 +33,7 @@ router.get("/", async (req: Request, res: Response) => {
 
     const rows = await query<LicitacionRow>(
       `SELECT id, codigo_externo, nombre, organismo_nombre, tipo,
-              monto_estimado, moneda, fecha_publicacion, fecha_cierre,
+              monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
               estado, url, region, categoria, created_at
        FROM licitaciones
        ORDER BY created_at DESC
@@ -68,7 +69,7 @@ router.get("/:id", async (req: Request, res: Response) => {
   try {
     const row = await queryOne<LicitacionRow>(
       `SELECT id, codigo_externo, nombre, organismo_nombre, tipo,
-              monto_estimado, moneda, fecha_publicacion, fecha_cierre,
+              monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
               estado, url, region, categoria, created_at
        FROM licitaciones
        WHERE id = $1 OR codigo_externo = $1`,
@@ -103,7 +104,7 @@ function formatLicitacion(row: LicitacionRow) {
           currency: row.moneda,
           maximumFractionDigits: 0,
         }).format(monto)
-      : null,
+      : row.monto_label ?? null,
     moneda: row.moneda,
     fechaPublicacion: row.fecha_publicacion,
     fechaCierre: row.fecha_cierre,

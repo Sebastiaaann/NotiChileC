@@ -182,13 +182,15 @@ export interface ScrapeResult {
  * Convierte datos scrapeados a LicitacionRecord para insertar en DB.
  */
 export function scrapedToRecord(scraped: ScrapedLicitacion): LicitacionRecord {
+  const montoNum = parseMonto(scraped.montoTexto);
   return {
     id: scraped.codigoExterno,
     codigo_externo: scraped.codigoExterno,
     nombre: scraped.nombre || "Sin nombre",
     organismo_nombre: scraped.organismo,
     tipo: scraped.tipo || null,
-    monto_estimado: parseMonto(scraped.montoTexto),
+    monto_estimado: montoNum,
+    monto_label: montoNum ? null : (scraped.montoTexto || null),
     moneda: "CLP",
     fecha_publicacion: parseFecha(scraped.fechaPublicacion) ?? new Date().toISOString(),
     fecha_cierre: parseFecha(scraped.fechaCierre),

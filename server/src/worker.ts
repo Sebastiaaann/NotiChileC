@@ -164,6 +164,7 @@ export async function runSyncCycle(): Promise<WorkerResult> {
             organismo_nombre: null,
             tipo: null,
             monto_estimado: null,
+            monto_label: null,
             moneda: "CLP",
             fecha_publicacion: new Date().toISOString(),
             fecha_cierre: summary.FechaCierre ?? null,
@@ -230,12 +231,12 @@ export async function runSyncCycle(): Promise<WorkerResult> {
         await query(
           `INSERT INTO licitaciones (
             id, codigo_externo, nombre, organismo_nombre, tipo,
-            monto_estimado, moneda, fecha_publicacion, fecha_cierre,
+            monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
             estado, url, region, categoria, notificada
           ) VALUES (
             $1, $2, $3, $4, $5,
-            $6, $7, $8::timestamptz, $9::timestamptz,
-            $10, $11, $12, $13, FALSE
+            $6, $7, $8, $9::timestamptz, $10::timestamptz,
+            $11, $12, $13, $14, FALSE
           )
           ON CONFLICT (codigo_externo) DO NOTHING`,
           [
@@ -245,6 +246,7 @@ export async function runSyncCycle(): Promise<WorkerResult> {
             record.organismo_nombre,
             record.tipo,
             record.monto_estimado,
+            record.monto_label,
             record.moneda,
             record.fecha_publicacion,
             record.fecha_cierre,
