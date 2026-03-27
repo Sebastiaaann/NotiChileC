@@ -1,50 +1,114 @@
-# Welcome to your Expo app 👋
+# NotiChileC 📱
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+App de licitaciones ChileCompra - Mantente al día con las oportunidades de negocio del Estado chileno.
 
-## Get started
+## 🚀 Quick Start
 
-1. Install dependencies
+### Requisitos Previos
 
-   ```bash
-   npm install
-   ```
+- Node.js 20+
+- PostgreSQL 14+
+- npm o yarn
 
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+### Instalación
 
 ```bash
-npm run reset-project
+# 1. Clonar el repositorio
+git clone https://github.com/Sebastiaaann/NotiChileC.git
+cd NotiChileC
+
+# 2. Setup automático (recomendado)
+npm run setup
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Esto instalará todas las dependencias y configurará la base de datos automáticamente.
 
-## Learn more
+### Configuración Manual
 
-To learn more about developing your project with Expo, look at the following resources:
+Si preferís la configuración manual:
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```bash
+# 1. Instalar dependencias
+npm install
+cd server && npm install && cd ..
 
-## Join the community
+# 2. Crear base de datos
+createdb notichilec
 
-Join our community of developers creating universal apps.
+# 3. Configurar variables de entorno
+cp .env.example .env
+# ⚠️ Editar .env con tu IP local
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+# 4. Ejecutar migrations
+cd server
+psql $DATABASE_URL -f bootstrap.sql
+psql $DATABASE_URL -f migrations/add_rubro_filters.sql
+cd ..
+```
+
+### Encontrar tu IP Local
+
+Para que el celular acceda al servidor:
+
+```bash
+# Windows
+ipconfig | findstr "IPv4"
+
+# Linux/macOS
+ip a | grep "inet " | grep -v "127.0.0.1"
+```
+
+Editá `.env` con tu IP (reemplazá `192.168.0.4`).
+
+### Ejecutar la App
+
+```bash
+# Terminal 1 - Backend (API + Worker)
+npm run dev:server
+
+# Terminal 2 - Frontend (Expo)
+npm run dev
+```
+
+O en una sola terminal:
+```bash
+npm run dev
+```
+
+## 📁 Estructura del Proyecto
+
+```
+NotiChileC/
+├── app/                    # Expo Router (frontend)
+├── server/
+│   ├── src/
+│   │   ├── server.ts      # API Express
+│   │   ├── worker.ts      # ChileCompra scraper
+│   │   ├── scraper.ts     # Lógica de scraping
+│   │   ├── chilecompra.ts # Cliente ChileCompra API
+│   │   ├── routes/        # Endpoints API
+│   │   └── db.ts          # Conexión PostgreSQL
+│   ├── migrations/        # Schema de DB
+│   └── bootstrap.sql      # Tablas principales
+├── .github/workflows/      # GitHub Actions CI/CD
+└── scripts/               # Utilidades de setup
+```
+
+## 🔧 Scripts Disponibles
+
+| Script | Descripción |
+|--------|-------------|
+| `npm run dev` | Iniciar app en desarrollo |
+| `npm run dev:server` | Iniciar solo el backend |
+| `npm run setup` | Setup automático (Linux/Mac) |
+| `npm run setup:win` | Setup automático (Windows) |
+| `npm run lint` | Linter de código |
+
+## 🌿 Ramas Git
+
+- `main` - Producción (protegida)
+- `develop` - Desarrollo
+
+## 📄 Licencia
+
+MIT

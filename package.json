@@ -8,7 +8,12 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "setup": "node scripts/setup.js",
+    "setup:win": "scripts\\setup.bat",
+    "setup:unix": "bash scripts/setup.sh",
+    "dev": "npm run start",
+    "dev:server": "cd server && npm run dev"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
