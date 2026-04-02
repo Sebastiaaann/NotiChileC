@@ -1,6 +1,6 @@
 # NotiChileC 📱
 
-App de licitaciones ChileCompra - Mantente al día con las oportunidades de negocio del Estado chileno.
+App de licitaciones ChileCompra para mantenerte al día con oportunidades de negocio del Estado chileno.
 
 ## 🚀 Quick Start
 
@@ -17,11 +17,13 @@ App de licitaciones ChileCompra - Mantente al día con las oportunidades de nego
 git clone https://github.com/Sebastiaaann/NotiChileC.git
 cd NotiChileC
 
-# 2. Setup automático (recomendado)
+# 2. Setup automático multiplataforma
 npm run setup
 ```
 
-Esto instalará todas las dependencias y configurará la base de datos automáticamente.
+`npm run setup` delega a:
+- `scripts/setup.bat` en Windows
+- `scripts/setup.sh` en Linux/macOS
 
 ### Configuración Manual
 
@@ -37,7 +39,11 @@ createdb notichilec
 
 # 3. Configurar variables de entorno
 cp .env.example .env
-# ⚠️ Editar .env con tu IP local
+# ⚠️ Editar .env con la URL pública/local del backend
+
+cd server
+cp .env.example .env
+cd ..
 
 # 4. Ejecutar migrations
 cd server
@@ -46,7 +52,12 @@ psql $DATABASE_URL -f migrations/add_rubro_filters.sql
 cd ..
 ```
 
-### Encontrar tu IP Local
+## 🔐 Variables de entorno
+
+- `D:\Expo movil\NotiChileC\.env` → variables públicas del cliente Expo (`EXPO_PUBLIC_*`)
+- `D:\Expo movil\NotiChileC\server\.env` → variables privadas del backend (`DATABASE_URL`, `CHILECOMPRA_TICKET`, `PORT`, `WORKER_INTERVAL_MINUTES`)
+
+### Encontrar tu IP local
 
 Para que el celular acceda al servidor:
 
@@ -58,22 +69,32 @@ ipconfig | findstr "IPv4"
 ip a | grep "inet " | grep -v "127.0.0.1"
 ```
 
-Editá `.env` con tu IP (reemplazá `192.168.0.4`).
+Editá `D:\Expo movil\NotiChileC\.env` con tu IP o URL del backend (reemplazá `192.168.0.4`).
 
 ### Ejecutar la App
 
 ```bash
-# Terminal 1 - Backend (API + Worker)
+# Terminal 1 - Backend combinado (API + Worker)
 npm run dev:server
 
 # Terminal 2 - Frontend (Expo)
 npm run dev
 ```
 
-O en una sola terminal:
+### Modos de backend
+
 ```bash
-npm run dev
+# API solamente
+npm run dev:server:api
+
+# Worker solamente
+npm run dev:server:worker
+
+# Ejecutar un ciclo manual del worker
+npm run server:worker:once
 ```
+
+Usá el modo combinado solo para desarrollo local rápido. Para crecer la aplicación, preferí API y worker como procesos separados.
 
 ## 📁 Estructura del Proyecto
 
@@ -98,10 +119,14 @@ NotiChileC/
 
 | Script | Descripción |
 |--------|-------------|
-| `npm run dev` | Iniciar app en desarrollo |
-| `npm run dev:server` | Iniciar solo el backend |
-| `npm run setup` | Setup automático (Linux/Mac) |
+| `npm run dev` | Iniciar app Expo |
+| `npm run dev:server` | Iniciar backend combinado (API + Worker) |
+| `npm run dev:server:api` | Iniciar solo la API |
+| `npm run dev:server:worker` | Iniciar solo el worker |
+| `npm run server:worker:once` | Ejecutar un ciclo manual del worker |
+| `npm run setup` | Setup automático multiplataforma |
 | `npm run setup:win` | Setup automático (Windows) |
+| `npm run setup:unix` | Setup automático (Linux/macOS) |
 | `npm run lint` | Linter de código |
 
 ## 🌿 Ramas Git

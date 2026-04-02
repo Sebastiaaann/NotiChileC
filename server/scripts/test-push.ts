@@ -5,38 +5,62 @@
  * Uso: npm run test-push
  */
 import "dotenv/config";
-import { sendPushToAll, getActiveTokens } from "../src/push";
-import { closePool } from "../src/db";
+import { createExpoPushProvider } from "../src/push";
+import { closePool, query } from "../src/db";
+import type { PushNotificationInput } from "../src/push-provider";
 
 async function main() {
   console.log("=== Test de Push Notification ===\n");
 
-  const tokens = await getActiveTokens();
-  console.log(`Tokens activos encontrados: ${tokens.length}`);
+  const installations = await query<{
+    installation_id: string;
+    push_token: string;
+  }>(
+    `SELECT installation_id, push_token
+     FROM device_installations
+     WHERE active = TRUE
+       AND push_capable = TRUE
+       AND push_token IS NOT NULL`
+  );
 
-  if (tokens.length === 0) {
-    console.log("\n⚠️  No hay dispositivos registrados.");
-    console.log("   Abre la app en un dispositivo físico primero.\n");
+  console.log(`Instalaciones activas encontradas: ${installations.length}`);
+
+  if (installations.length === 0) {
+    console.log("\n⚠️  No hay instalaciones push activas.\n");
     await closePool();
     return;
   }
 
-  console.log("Tokens:", tokens.map((t) => t.slice(0, 35) + "...").join("\n       "));
+  console.log(
+    "Tokens:",
+    installations
+      .map((installation) => installation.push_token.slice(0, 35) + "...")
+      .join("\n       ")
+  );
   console.log("\nEnviando notificación de prueba...\n");
 
-  const result = await sendPushToAll(
-    "🔔 Test NotiChileC",
-    "Esta es una notificación de prueba. Si la ves, ¡el sistema funciona!",
-    {
+  const provider = createExpoPushProvider();
+  const inputs: PushNotificationInput[] = installations.map((installation) => ({
+    installationId: installation.installation_id,
+    pushToken: installation.push_token,
+    title: "🔔 Test NotiChileC",
+    body: "Esta es una notificación de prueba. Si la ves, ¡el sistema funciona!",
+    data: {
       type: "test",
       timestamp: new Date().toISOString(),
-    }
-  );
+    },
+  }));
+
+  const result = await provider.send(inputs);
 
   console.log(`\n✅ Resultado:`);
-  console.log(`   Enviadas: ${result.sent}`);
-  console.log(`   Fallidas: ${result.failed}`);
-  console.log(`   Tokens desactivados: ${result.invalidTokens.length}`);
+  console.log(`   Enviadas: ${result.filter((r) => r.status === "sent").length}`);
+  console.log(`   Fallidas: ${result.filter((r) => r.status !== "sent").length}`);
+  console.log(
+    `   Tokens desactivados: ${
+      result.filter((r) => r.status === "invalid").length
+    }`
+  );
 
   await closePool();
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -7,11 +7,29 @@ import {
   RefreshControl,
   TouchableOpacity,
   ActivityIndicator,
+  ScrollView,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { colors, tipoColors } from "../../src/theme/colors";
-import { fetchLicitaciones, type Licitacion } from "../../src/services/api";
+import { colors, tipoLabels } from "../../src/theme/colors";
+import {
+  fetchLicitaciones,
+  fetchRubros,
+  fetchRegions,
+  type Licitacion,
+  type RegionOption,
+  type Rubro,
+} from "../../src/services/api";
+import {
+  DEFAULT_FEED_FILTERS,
+  FEED_FILTERS_STORAGE_KEY,
+  hasActiveFeedFilters,
+  MONTO_PRESETS,
+  sanitizeFeedFilters,
+  type FeedFilters,
+} from "../../src/services/feed-filters";
+import { feedFiltersStorage } from "../../src/services/feed-filters-storage";
+import { syncFeedFiltersPreferences } from "../../src/services/push-installation";
 
 // ── Helpers ─────────────────────────────────────────
 
@@ -38,65 +56,192 @@ function isCerrada(item: Licitacion): boolean {
   return new Date(item.fechaCierre).getTime() < Date.now();
 }
 
+const HOT_WINDOW_DAYS = 90;
+
+function mergeUniqueLicitaciones(
+  current: Licitacion[],
+  incoming: Licitacion[]
+): Licitacion[] {
+  const seen = new Set(current.map((item) => item.id));
+  const nextItems = incoming.filter((item) => !seen.has(item.id));
+  return nextItems.length > 0 ? [...current, ...nextItems] : current;
+}
+
 // ── Component ───────────────────────────────────────
 
 export default function LicitacionesFeed() {
   const router = useRouter();
   const [licitaciones, setLicitaciones] = useState<Licitacion[]>([]);
+  const [rubros, setRubros] = useState<Rubro[]>([]);
+  const [regions, setRegions] = useState<RegionOption[]>([]);
+  const [filters, setFilters] = useState<FeedFilters>(DEFAULT_FEED_FILTERS);
+  const [hydrated, setHydrated] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
+  const activeFilters = useMemo(() => hasActiveFeedFilters(filters), [filters]);
+  const requestSequenceRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function initializeFeed() {
+      try {
+        const [rubrosResponse, regionsResponse, storedFilters] =
+          await Promise.all([
+            fetchRubros().catch((err) => {
+              console.error("[feed] Error cargando rubros:", err);
+              return { data: [] as Rubro[] };
+            }),
+            fetchRegions().catch((err) => {
+              console.error("[feed] Error cargando regiones:", err);
+              return { data: [] as RegionOption[] };
+            }),
+            feedFiltersStorage.getItem(FEED_FILTERS_STORAGE_KEY),
+          ]);
+
+        if (cancelled) return;
+
+        setRubros(rubrosResponse.data);
+        setRegions(regionsResponse.data);
+
+        if (storedFilters) {
+          const parsed = JSON.parse(storedFilters) as unknown;
+          setFilters(sanitizeFeedFilters(parsed));
+        }
+      } catch (err) {
+        console.error("[feed] Error inicializando filtros:", err);
+      } finally {
+        if (!cancelled) {
+          setHydrated(true);
+        }
+      }
+    }
+
+    void initializeFeed();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    void feedFiltersStorage.setItem(
+      FEED_FILTERS_STORAGE_KEY,
+      JSON.stringify(filters)
+    ).catch((err) => console.error("[feed] Error persistiendo filtros:", err));
+  }, [filters, hydrated]);
 
   const loadLicitaciones = useCallback(
-    async (pageNum: number = 1, isRefresh: boolean = false) => {
+    async (
+      options: {
+        cursor?: string | null;
+        append?: boolean;
+        isRefresh?: boolean;
+      } = {}
+    ) => {
+      if (!hydrated) return;
+
+      const isAppending = Boolean(options.append && options.cursor);
+      if (isAppending && loadingMore) {
+        return;
+      }
+
+      const requestSequence = ++requestSequenceRef.current;
+
       try {
-        if (isRefresh) setRefreshing(true);
-        else if (pageNum === 1) setLoading(true);
+        if (options.isRefresh) setRefreshing(true);
+        else if (isAppending) setLoadingMore(true);
+        else setLoading(true);
 
-        const response = await fetchLicitaciones(pageNum);
+        const response = await fetchLicitaciones({
+          cursor: options.cursor ?? null,
+          limit: 20,
+          windowDays: HOT_WINDOW_DAYS,
+          filters,
+        });
 
-        if (pageNum === 1) {
-          setLicitaciones(response.data);
-        } else {
-          setLicitaciones((prev) => [...prev, ...response.data]);
+        if (requestSequence !== requestSequenceRef.current) {
+          return;
         }
 
-        setHasMore(pageNum < response.pagination.totalPages);
-        setPage(pageNum);
+        if (isAppending) {
+          setLicitaciones((prev) => mergeUniqueLicitaciones(prev, response.data));
+        } else {
+          setLicitaciones(response.data);
+        }
+
+        setHasMore(response.pageInfo.hasMore);
+        setNextCursor(response.pageInfo.nextCursor);
         setError(null);
       } catch (err) {
+        if (requestSequence !== requestSequenceRef.current) {
+          return;
+        }
+
         setError(
           err instanceof Error ? err.message : "Error cargando licitaciones"
         );
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (isAppending) {
+          setLoadingMore(false);
+          return;
+        }
+
+        if (requestSequence === requestSequenceRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
+    },
+    [filters, hydrated, loadingMore]
+  );
+
+  useEffect(() => {
+    if (!hydrated) return;
+    loadLicitaciones();
+  }, [loadLicitaciones, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    const timeoutId = setTimeout(() => {
+      void syncFeedFiltersPreferences(filters);
+    }, 250);
+
+    return () => clearTimeout(timeoutId);
+  }, [filters, hydrated]);
+
+  const onRefresh = useCallback(() => {
+    loadLicitaciones({ cursor: null, append: false, isRefresh: true });
+  }, [loadLicitaciones]);
+
+  const onLoadMore = useCallback(() => {
+    if (hasMore && !loading && !loadingMore && nextCursor) {
+      loadLicitaciones({ cursor: nextCursor, append: true });
+    }
+  }, [hasMore, loading, loadingMore, nextCursor, loadLicitaciones]);
+
+  const updateFilters = useCallback(
+    (updater: (current: FeedFilters) => FeedFilters) => {
+      setFilters((current) => updater(current));
     },
     []
   );
 
-  useEffect(() => {
-    loadLicitaciones(1);
-  }, [loadLicitaciones]);
-
-  const onRefresh = useCallback(() => {
-    loadLicitaciones(1, true);
-  }, [loadLicitaciones]);
-
-  const onLoadMore = useCallback(() => {
-    if (hasMore && !loading) {
-      loadLicitaciones(page + 1);
-    }
-  }, [hasMore, loading, page, loadLicitaciones]);
+  const clearFilters = useCallback(() => {
+    setFilters(DEFAULT_FEED_FILTERS);
+  }, []);
 
   // ── Card ────────────────────────────────────────
 
   const renderItem = ({ item }: { item: Licitacion }) => {
     const cerrada = isCerrada(item);
-    const tipoColor = tipoColors[item.tipo ?? ""] ?? colors.textMuted;
     const ago = timeAgo(item.createdAt);
 
     return (
@@ -185,7 +330,9 @@ export default function LicitacionesFeed() {
         <Text style={styles.errorText}>{error}</Text>
         <TouchableOpacity
           style={styles.retryButton}
-          onPress={() => loadLicitaciones(1)}
+          onPress={() =>
+            loadLicitaciones({ cursor: null, append: false, isRefresh: false })
+          }
         >
           <Text style={styles.retryText}>Reintentar</Text>
         </TouchableOpacity>
@@ -193,8 +340,208 @@ export default function LicitacionesFeed() {
     );
   }
 
+  const renderFilters = () => (
+    <View style={styles.filtersContainer}>
+      <View style={styles.filtersHeader}>
+        <View>
+          <Text style={styles.filtersTitle}>Filtros</Text>
+          {activeFilters ? (
+            <Text style={styles.filtersSubtitle}>Filtros activos</Text>
+          ) : (
+            <Text style={styles.filtersSubtitle}>Mostrando todas las licitaciones</Text>
+          )}
+        </View>
+        {activeFilters ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={clearFilters}
+            style={styles.clearButton}
+          >
+            <Text style={styles.clearButtonText}>Limpiar filtros</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterScroll}
+        contentContainerStyle={styles.filterScrollContent}
+      >
+        <TouchableOpacity
+          style={[styles.chip, !filters.rubro && styles.chipActive]}
+          onPress={() =>
+            updateFilters((current) => ({ ...current, rubro: null }))
+          }
+        >
+          <Text
+            style={[styles.chipText, !filters.rubro && styles.chipTextActive]}
+          >
+            Todos los rubros
+          </Text>
+        </TouchableOpacity>
+        {rubros.map((rubro) => (
+          <TouchableOpacity
+            key={rubro.code}
+            style={[
+              styles.chip,
+              filters.rubro === rubro.code && styles.chipActive,
+            ]}
+            onPress={() =>
+              updateFilters((current) => ({ ...current, rubro: rubro.code }))
+            }
+          >
+            <Text
+              style={[
+                styles.chipText,
+                filters.rubro === rubro.code && styles.chipTextActive,
+              ]}
+            >
+              {rubro.name}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterScroll}
+        contentContainerStyle={styles.filterScrollContent}
+      >
+        <TouchableOpacity
+          style={[styles.chip, !filters.tipo && styles.chipActive]}
+          onPress={() => updateFilters((current) => ({ ...current, tipo: null }))}
+        >
+          <Text
+            style={[styles.chipText, !filters.tipo && styles.chipTextActive]}
+          >
+            Todos los tipos
+          </Text>
+        </TouchableOpacity>
+        {Object.entries(tipoLabels).map(([tipoCode, label]) => (
+          <TouchableOpacity
+            key={tipoCode}
+            style={[
+              styles.chip,
+              filters.tipo === tipoCode && styles.chipActive,
+            ]}
+            onPress={() =>
+              updateFilters((current) => ({ ...current, tipo: tipoCode }))
+            }
+          >
+            <Text
+              style={[
+                styles.chipText,
+                filters.tipo === tipoCode && styles.chipTextActive,
+              ]}
+            >
+              {label} ({tipoCode})
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterScroll}
+        contentContainerStyle={styles.filterScrollContent}
+      >
+        <TouchableOpacity
+          style={[styles.chip, !filters.region && styles.chipActive]}
+          onPress={() =>
+            updateFilters((current) => ({ ...current, region: null }))
+          }
+        >
+          <Text
+            style={[styles.chipText, !filters.region && styles.chipTextActive]}
+          >
+            Todas las regiones
+          </Text>
+        </TouchableOpacity>
+        {regions.map((region) => (
+          <TouchableOpacity
+            key={region.name}
+            style={[
+              styles.chip,
+              filters.region === region.name && styles.chipActive,
+            ]}
+            onPress={() =>
+              updateFilters((current) => ({ ...current, region: region.name }))
+            }
+          >
+            <Text
+              style={[
+                styles.chipText,
+                filters.region === region.name && styles.chipTextActive,
+              ]}
+            >
+              {region.name}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterScroll}
+        contentContainerStyle={styles.filterScrollContent}
+      >
+        <TouchableOpacity
+          style={[styles.chip, !filters.montoPresetId && styles.chipActive]}
+          onPress={() =>
+            updateFilters((current) => ({
+              ...current,
+              montoPresetId: null,
+              montoMin: null,
+              montoMax: null,
+            }))
+          }
+        >
+          <Text
+            style={[
+              styles.chipText,
+              !filters.montoPresetId && styles.chipTextActive,
+            ]}
+          >
+            Todos los montos
+          </Text>
+        </TouchableOpacity>
+        {MONTO_PRESETS.map((preset) => (
+          <TouchableOpacity
+            key={preset.id}
+            style={[
+              styles.chip,
+              filters.montoPresetId === preset.id && styles.chipActive,
+            ]}
+            onPress={() =>
+              updateFilters((current) => ({
+                ...current,
+                montoPresetId: preset.id,
+                montoMin: preset.min,
+                montoMax: preset.max,
+              }))
+            }
+          >
+            <Text
+              style={[
+                styles.chipText,
+                filters.montoPresetId === preset.id && styles.chipTextActive,
+              ]}
+            >
+              {preset.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    </View>
+  );
+
   return (
     <View style={styles.container}>
+      {renderFilters()}
       <FlatList
         data={licitaciones}
         renderItem={renderItem}
@@ -211,7 +558,7 @@ export default function LicitacionesFeed() {
         onEndReached={onLoadMore}
         onEndReachedThreshold={0.3}
         ListFooterComponent={
-          hasMore ? (
+          loadingMore ? (
             <ActivityIndicator
               style={styles.footer}
               color={colors.primary}
@@ -228,8 +575,18 @@ export default function LicitacionesFeed() {
               color={colors.textMuted}
             />
             <Text style={styles.emptyText}>
-              Aún no hay licitaciones. El worker está buscando...
+              {activeFilters
+                ? "No hay licitaciones para estos filtros."
+                : "Aún no hay licitaciones. El worker está buscando..."}
             </Text>
+            {activeFilters ? (
+              <TouchableOpacity
+                style={styles.retryButton}
+                onPress={clearFilters}
+              >
+                <Text style={styles.retryText}>Limpiar filtros</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         }
       />
@@ -243,6 +600,68 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  filtersContainer: {
+    backgroundColor: colors.surface,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  filterScroll: {
+    marginBottom: 8,
+  },
+  filtersHeader: {
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  filtersTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  filtersSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  clearButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: colors.primaryBg,
+  },
+  clearButtonText: {
+    color: colors.primary,
+    fontWeight: "600",
+    fontSize: 12,
+  },
+  filterScrollContent: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  chipActive: {
+    backgroundColor: colors.primaryBg,
+    borderColor: colors.primary,
+  },
+  chipText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    fontWeight: "500",
+  },
+  chipTextActive: {
+    color: colors.primary,
+    fontWeight: "600",
   },
   list: {
     padding: 16,

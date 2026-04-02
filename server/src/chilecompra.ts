@@ -1,6 +1,8 @@
 // Cliente de la API de Mercado Público (ChileCompra)
 // Basado en la implementación del proyecto anterior
 
+import { workerLogger } from "./observability/logger";
+
 const API_BASE_URL =
   "https://api.mercadopublico.cl/servicios/v1/publico/licitaciones.json";
 const DEFAULT_RETRIES = 3;
@@ -57,6 +59,7 @@ export interface LicitacionRecord {
   url: string;
   region: string | null;
   categoria: string;
+  rubro_code: string | null;
 }
 
 // ── Helpers ─────────────────────────────────────────────
@@ -127,6 +130,10 @@ function extractCategoria(detail: ChileCompraDetailItem): string {
   return "General";
 }
 
+function extractRubroCode(detail: ChileCompraDetailItem): string | null {
+  return extractCategoria(detail).match(/\b\d{8}\b/)?.[0] ?? null;
+}
+
 // ── API calls con retry ─────────────────────────────────
 
 async function fetchJson<T>(params: Record<string, string>): Promise<T> {
@@ -170,7 +177,12 @@ async function fetchJson<T>(params: Record<string, string>): Promise<T> {
 
       return body as T;
     } catch (error) {
-      console.error(`[chilecompra] Intento ${attempt + 1} falló:`, error);
+      workerLogger.error("chilecompra_request_failed", {
+        job: "ingest",
+        attempt: attempt + 1,
+        error_code: "chilecompra_request_failed",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
       lastError = error;
       if (attempt < DEFAULT_RETRIES) {
         await sleep(BACKOFF_MS * (attempt + 1));
@@ -195,12 +207,18 @@ interface DetailResponse {
 export async function fetchLicitacionesSummary(
   date: Date
 ): Promise<ChileCompraSummaryItem[]> {
-  console.log(`[chilecompra] fetchLicitacionesSummary para ${formatDate(date)}`);
+  workerLogger.info("chilecompra_fetch_summary", {
+    job: "ingest",
+    target_date: formatDate(date),
+  });
   const payload = await fetchJson<SummaryResponse>({
     fecha: formatDate(date),
     estado: "publicada",
   });
-  console.log(`[chilecompra] Respuesta recibida, ${asArray(payload.Listado).length} items`);
+  workerLogger.info("chilecompra_summary_received", {
+    job: "ingest",
+    items: asArray(payload.Listado).length,
+  });
 
   return asArray(payload.Listado).filter(
     (item) => String(item.CodigoExterno ?? "").trim().length > 0
@@ -260,5 +278,6 @@ export function mapDetailToRecord(
     url: `https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion=${encodeURIComponent(codigo)}`,
     region: normalizeText(detail.Comprador?.RegionUnidad),
     categoria: extractCategoria(detail),
+    rubro_code: extractRubroCode(detail),
   };
 }

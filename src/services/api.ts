@@ -1,6 +1,23 @@
 import { Platform } from "react-native";
+import type { FeedFilters } from "./feed-filters";
+import type {
+  InstallationPreferencesPayload,
+  InstallationSyncPayload,
+} from "./installation-types";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3000";
+const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3001";
+
+export class ApiError extends Error {
+  status: number;
+  body: string;
+
+  constructor(status: number, body: string) {
+    super(`API error ${status}: ${body}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
 
 // ── Tipos ───────────────────────────────────────────
 
@@ -22,14 +39,27 @@ export interface Licitacion {
   createdAt: string;
 }
 
-export interface PaginatedResponse {
+export interface Rubro {
+  code: string;
+  name: string;
+  parentCode: string | null;
+}
+
+export interface RegionOption {
+  name: string;
+}
+
+export interface CursorPageInfo {
+  limit: number;
+  hasMore: boolean;
+  nextCursor: string | null;
+  windowDays: number;
+  windowStart: string;
+}
+
+export interface CursorPaginatedResponse {
   data: Licitacion[];
-  pagination: {
-    page: number;
-    pageSize: number;
-    total: number;
-    totalPages: number;
-  };
+  pageInfo: CursorPageInfo;
 }
 
 // ── Helpers ─────────────────────────────────────────
@@ -47,7 +77,7 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`API error ${response.status}: ${body}`);
+    throw new ApiError(response.status, body);
   }
 
   return response.json() as Promise<T>;
@@ -66,6 +96,37 @@ export async function registerDevice(expoPushToken: string): Promise<void> {
       platform: Platform.OS,
     }),
   });
+}
+
+export async function syncInstallation(
+  installationId: string,
+  payload: InstallationSyncPayload
+): Promise<void> {
+  await fetchApi(`/api/installations/${encodeURIComponent(installationId)}/sync`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getInstallationPreferences(
+  installationId: string
+): Promise<InstallationPreferencesPayload> {
+  return fetchApi<InstallationPreferencesPayload>(
+    `/api/installations/${encodeURIComponent(installationId)}/preferences`
+  );
+}
+
+export async function updateInstallationPreferences(
+  installationId: string,
+  payload: InstallationPreferencesPayload
+): Promise<void> {
+  await fetchApi(
+    `/api/installations/${encodeURIComponent(installationId)}/preferences`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }
+  );
 }
 
 export async function registerTokenWithRetry(
@@ -99,12 +160,49 @@ export async function registerTokenWithRetry(
  * Obtiene la lista de licitaciones paginada.
  */
 export async function fetchLicitaciones(
-  page: number = 1,
-  pageSize: number = 20
-): Promise<PaginatedResponse> {
-  return fetchApi<PaginatedResponse>(
-    `/api/licitaciones?page=${page}&pageSize=${pageSize}`
+  options: {
+    cursor?: string | null;
+    limit?: number;
+    windowDays?: number;
+    filters?: Partial<FeedFilters>;
+  } = {}
+): Promise<CursorPaginatedResponse> {
+  const params = new URLSearchParams({
+    limit: String(options.limit ?? 20),
+    windowDays: String(options.windowDays ?? 90),
+  });
+
+  if (options.cursor) {
+    params.append("cursor", options.cursor);
+  }
+
+  if (options.filters?.rubro) params.append("rubro", options.filters.rubro);
+  if (options.filters?.tipo) params.append("tipo", options.filters.tipo);
+  if (options.filters?.region) params.append("region", options.filters.region);
+  if (
+    options.filters?.montoMin !== null &&
+    options.filters?.montoMin !== undefined
+  ) {
+    params.append("montoMin", String(options.filters.montoMin));
+  }
+  if (
+    options.filters?.montoMax !== null &&
+    options.filters?.montoMax !== undefined
+  ) {
+    params.append("montoMax", String(options.filters.montoMax));
+  }
+
+  return fetchApi<CursorPaginatedResponse>(
+    `/api/licitaciones?${params.toString()}`
   );
+}
+
+export async function fetchRubros(): Promise<{ data: Rubro[] }> {
+  return fetchApi<{ data: Rubro[] }>("/api/rubros");
+}
+
+export async function fetchRegions(): Promise<{ data: RegionOption[] }> {
+  return fetchApi<{ data: RegionOption[] }>("/api/licitaciones/regions");
 }
 
 /**

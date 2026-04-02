@@ -1,122 +1,244 @@
-import Expo, { type ExpoPushMessage, type ExpoPushTicket } from "expo-server-sdk";
-import { query } from "./db";
+import Expo, { type ExpoPushMessage } from "expo-server-sdk";
+import type {
+  PushDeliveryStatus,
+  PushNotificationInput,
+  PushNotificationOutcome,
+  PushReceiptOutcome,
+  PushProvider,
+} from "./push-provider";
 
-const expo = new Expo();
+const RETRYABLE_EXPO_ERRORS = new Set([
+  "MessageRateExceeded",
+  "TooManyRequests",
+  "ServiceUnavailable",
+  "InternalServerError",
+]);
 
-interface DeviceTokenRow {
-  expo_push_token: string;
-  [key: string]: unknown;
-}
+const INVALID_EXPO_ERRORS = new Set(["DeviceNotRegistered"]);
 
-/**
- * Obtiene todos los tokens de dispositivos activos desde la DB.
- */
-export async function getActiveTokens(): Promise<string[]> {
-  const rows = await query<DeviceTokenRow>(
-    "SELECT expo_push_token FROM device_tokens WHERE active = TRUE"
-  );
-  return rows.map((r) => r.expo_push_token);
-}
-
-/**
- * Envía notificación push a todos los dispositivos registrados.
- * Retorna la cantidad de notificaciones enviadas exitosamente.
- */
-export async function sendPushToAll(
-  title: string,
-  body: string,
-  data?: Record<string, unknown>
-): Promise<{ sent: number; failed: number; invalidTokens: string[] }> {
-  const tokens = await getActiveTokens();
-
-  if (tokens.length === 0) {
-    console.log("[push] No hay dispositivos registrados");
-    return { sent: 0, failed: 0, invalidTokens: [] };
+function classifyExpoError(
+  errorCode: string | null | undefined
+): {
+  status: PushDeliveryStatus;
+  errorCode: string | null;
+  errorMessage: string | null;
+} {
+  if (!errorCode) {
+    return {
+      status: "failed",
+      errorCode: null,
+      errorMessage: null,
+    };
   }
 
-  // Construir mensajes (solo tokens válidos de Expo)
-  const messages: ExpoPushMessage[] = [];
-  const invalidTokens: string[] = [];
+  if (INVALID_EXPO_ERRORS.has(errorCode)) {
+    return {
+      status: "invalid",
+      errorCode,
+      errorMessage: errorCode,
+    };
+  }
 
-  for (const token of tokens) {
-    if (!Expo.isExpoPushToken(token)) {
-      console.warn(`[push] Token inválido, será desactivado: ${token}`);
-      invalidTokens.push(token);
-      continue;
+  if (RETRYABLE_EXPO_ERRORS.has(errorCode)) {
+    return {
+      status: "retryable",
+      errorCode,
+      errorMessage: errorCode,
+    };
+  }
+
+  return {
+    status: "failed",
+    errorCode,
+    errorMessage: errorCode,
+  };
+}
+
+function buildFailedOutcome(
+  message: PushNotificationInput,
+  status: PushDeliveryStatus,
+  errorCode: string | null,
+  errorMessage: string | null
+): PushNotificationOutcome {
+  return {
+    installationId: message.installationId,
+    pushToken: message.pushToken,
+    status,
+    providerTicketId: null,
+    providerReceiptId: null,
+    errorCode,
+    errorMessage,
+  };
+}
+
+export class ExpoPushProvider implements PushProvider {
+  readonly name = "expo";
+
+  constructor(private readonly expo = new Expo()) {}
+
+  async send(
+    messages: PushNotificationInput[]
+  ): Promise<PushNotificationOutcome[]> {
+    if (messages.length === 0) {
+      return [];
     }
 
-    messages.push({
-      to: token,
-      sound: "default",
-      title,
-      body,
-      data: data ?? {},
-      priority: "high",
+    const outcomes: Array<PushNotificationOutcome | undefined> = new Array(
+      messages.length
+    );
+
+    const validMessages: Array<{
+      index: number;
+      message: PushNotificationInput;
+    }> = [];
+    const expoMessages: ExpoPushMessage[] = [];
+
+    messages.forEach((message, index) => {
+      if (!Expo.isExpoPushToken(message.pushToken)) {
+        outcomes[index] = buildFailedOutcome(
+          message,
+          "invalid",
+          "InvalidExpoPushToken",
+          "Token de Expo inválido"
+        );
+        return;
+      }
+
+      validMessages.push({ index, message });
+      expoMessages.push({
+        to: message.pushToken,
+        title: message.title,
+        body: message.body,
+        data: message.data ?? {},
+        sound: "default",
+        priority: "high",
+      });
+    });
+
+    const chunks = this.expo.chunkPushNotifications(expoMessages);
+    let cursor = 0;
+
+    for (const chunk of chunks) {
+      const chunkMessages = validMessages.slice(cursor, cursor + chunk.length);
+      cursor += chunk.length;
+
+      try {
+        const tickets = await this.expo.sendPushNotificationsAsync(chunk);
+
+        tickets.forEach((ticket, index) => {
+          const original = chunkMessages[index];
+          if (!original) return;
+
+          if (ticket.status === "ok") {
+            outcomes[original.index] = {
+              installationId: original.message.installationId,
+              pushToken: original.message.pushToken,
+              status: "sent",
+              providerTicketId: ticket.id ?? null,
+              providerReceiptId: null,
+              errorCode: null,
+              errorMessage: null,
+            };
+            return;
+          }
+
+          const classification = classifyExpoError(ticket.details?.error ?? null);
+          outcomes[original.index] = {
+            installationId: original.message.installationId,
+            pushToken: original.message.pushToken,
+            status: classification.status,
+            providerTicketId: null,
+            providerReceiptId: null,
+            errorCode: classification.errorCode,
+            errorMessage: ticket.message ?? classification.errorMessage,
+          };
+        });
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Error enviando chunk Expo";
+
+        chunkMessages.forEach((chunkMessage) => {
+          outcomes[chunkMessage.index] = buildFailedOutcome(
+            chunkMessage.message,
+            "retryable",
+            "ExpoChunkError",
+            errorMessage
+          );
+        });
+      }
+    }
+
+    return outcomes.map((outcome, index) => {
+      if (outcome) return outcome;
+
+      const message = messages[index];
+      return buildFailedOutcome(
+        message,
+        "failed",
+        "ExpoUnknownOutcome",
+        "No se obtuvo resultado para el envío"
+      );
     });
   }
 
-  if (messages.length === 0) {
-    await deactivateTokens(invalidTokens);
-    return { sent: 0, failed: 0, invalidTokens };
-  }
-
-  // Enviar en chunks (Expo limita a 100 por request)
-  const chunks = expo.chunkPushNotifications(messages);
-  let sent = 0;
-  let failed = 0;
-
-  for (const chunk of chunks) {
-    try {
-      const tickets: ExpoPushTicket[] =
-        await expo.sendPushNotificationsAsync(chunk);
-
-      for (let i = 0; i < tickets.length; i++) {
-        const ticket = tickets[i];
-        if (ticket.status === "ok") {
-          sent++;
-        } else {
-          failed++;
-          // Si el token ya no es válido, marcarlo para desactivar
-          if (
-            ticket.details?.error === "DeviceNotRegistered"
-          ) {
-            const msg = chunk[i];
-            const tokenStr = typeof msg.to === "string" ? msg.to : msg.to[0];
-            invalidTokens.push(tokenStr);
-          }
-        }
-      }
-    } catch (error) {
-      console.error("[push] Error enviando chunk:", error);
-      failed += chunk.length;
+  async fetchReceipts(ticketIds: string[]): Promise<PushReceiptOutcome[]> {
+    if (ticketIds.length === 0) {
+      return [];
     }
+
+    const outcomes: PushReceiptOutcome[] = [];
+    const chunks = this.expo.chunkPushNotificationReceiptIds(ticketIds);
+
+    for (const chunk of chunks) {
+      try {
+        const receipts = await this.expo.getPushNotificationReceiptsAsync(chunk);
+
+        for (const ticketId of chunk) {
+          const receipt = receipts[ticketId];
+          if (!receipt) {
+            continue;
+          }
+
+          if (receipt.status === "ok") {
+            outcomes.push({
+              providerTicketId: ticketId,
+              providerReceiptId: ticketId,
+              status: "sent",
+              errorCode: null,
+              errorMessage: null,
+            });
+            continue;
+          }
+
+          const classification = classifyExpoError(receipt.details?.error ?? null);
+          outcomes.push({
+            providerTicketId: ticketId,
+            providerReceiptId: ticketId,
+            status: classification.status,
+            errorCode: classification.errorCode,
+            errorMessage: receipt.message ?? classification.errorMessage,
+          });
+        }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Error obteniendo receipts Expo";
+
+        chunk.forEach((ticketId) => {
+          outcomes.push({
+            providerTicketId: ticketId,
+            providerReceiptId: null,
+            status: "retryable",
+            errorCode: "ExpoReceiptError",
+            errorMessage,
+          });
+        });
+      }
+    }
+
+    return outcomes;
   }
-
-  // Desactivar tokens inválidos
-  if (invalidTokens.length > 0) {
-    await deactivateTokens(invalidTokens);
-  }
-
-  console.log(
-    `[push] Enviadas: ${sent}, Fallidas: ${failed}, Tokens desactivados: ${invalidTokens.length}`
-  );
-
-  return { sent, failed, invalidTokens };
 }
 
-/**
- * Desactiva tokens que ya no son válidos en la DB.
- */
-async function deactivateTokens(tokens: string[]): Promise<void> {
-  if (tokens.length === 0) return;
-
-  try {
-    await query(
-      "UPDATE device_tokens SET active = FALSE WHERE expo_push_token = ANY($1::text[])",
-      [tokens]
-    );
-    console.log(`[push] Desactivados ${tokens.length} tokens inválidos`);
-  } catch (error) {
-    console.error("[push] Error desactivando tokens:", error);
-  }
+export function createExpoPushProvider(): ExpoPushProvider {
+  return new ExpoPushProvider();
 }

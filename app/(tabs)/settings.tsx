@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -7,43 +7,104 @@ import {
   TouchableOpacity,
   Alert,
   Platform,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../src/theme/colors";
-import { registerForPushNotifications } from "../../src/services/push";
-import { registerDevice } from "../../src/services/api";
+import {
+  bootstrapPushInstallation,
+  getCachedPushInstallationSnapshot,
+  type PushInstallationSnapshot,
+} from "../../src/services/push-installation";
+
+function getEnvironmentLabel(environment: PushInstallationSnapshot["environment"]) {
+  switch (environment) {
+    case "expo-go":
+      return "Expo Go";
+    case "development":
+      return "Development build";
+    case "production":
+      return "Producción";
+  }
+}
+
+function getStatusCopy(snapshot: PushInstallationSnapshot) {
+  switch (snapshot.registrationStatus) {
+    case "registered":
+      return "Este dispositivo ya quedó sincronizado con el backend y puede recibir alertas.";
+    case "permission_denied":
+      return "El sistema operativo bloqueó permisos de notificación. Rehabilitalos en Ajustes.";
+    case "unsupported_environment":
+      return "Expo Go no permite registrar un token nuevo. Si este dispositivo ya estaba registrado antes, las notificaciones pueden seguir llegando.";
+    case "unsupported_device":
+      return "Las notificaciones push requieren un dispositivo físico.";
+    case "not_registered":
+      return "Todavía no se registró este dispositivo para push.";
+  }
+}
+
+function getStatusTone(snapshot: PushInstallationSnapshot) {
+  if (snapshot.registrationStatus === "registered") return "success";
+  if (snapshot.registrationStatus === "permission_denied") return "warning";
+  return "info";
+}
 
 export default function SettingsScreen() {
-  const [token, setToken] = useState<string | null>(null);
-  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushSnapshot, setPushSnapshot] =
+    useState<PushInstallationSnapshot | null>(null);
+  const [loadingSnapshot, setLoadingSnapshot] = useState(true);
   const [registering, setRegistering] = useState(false);
 
+  const environmentLabel = useMemo(() => {
+    if (!pushSnapshot) return "—";
+    return getEnvironmentLabel(pushSnapshot.environment);
+  }, [pushSnapshot]);
+
   useEffect(() => {
-    checkPushStatus();
+    let cancelled = false;
+
+    async function loadSnapshot() {
+      try {
+        const snapshot = await getCachedPushInstallationSnapshot();
+        if (!cancelled) {
+          setPushSnapshot(snapshot);
+        }
+      } catch (error) {
+        console.warn("[push] Error cargando estado de push:", error);
+      } finally {
+        if (!cancelled) {
+          setLoadingSnapshot(false);
+        }
+      }
+    }
+
+    void loadSnapshot();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  async function checkPushStatus() {
-    const result = await registerForPushNotifications();
-    if (result.ok) {
-      setToken(result.token);
-      setPushEnabled(true);
-    } else {
-      setToken(null);
-      setPushEnabled(false);
-    }
-  }
-
   async function handleReRegister() {
+    if (registering || !pushSnapshot) return;
+
+    if (pushSnapshot.capability !== "supported") {
+      Alert.alert(
+        "Push no disponible",
+        getStatusCopy(pushSnapshot)
+      );
+      return;
+    }
+
     setRegistering(true);
     try {
-      const result = await registerForPushNotifications();
-      if (result.ok) {
-        await registerDevice(result.token);
-        setToken(result.token);
-        setPushEnabled(true);
-        Alert.alert("Listo", "Token push re-registrado correctamente");
+      const snapshot = await bootstrapPushInstallation();
+      setPushSnapshot(snapshot);
+
+      if (snapshot.registrationStatus === "registered") {
+        Alert.alert("Listo", "Push sincronizado correctamente.");
       } else {
-        Alert.alert("Error", result.reason);
+        Alert.alert("Estado de push", getStatusCopy(snapshot));
       }
     } catch (error) {
       Alert.alert(
@@ -54,6 +115,8 @@ export default function SettingsScreen() {
       setRegistering(false);
     }
   }
+
+  const bannerTone = pushSnapshot ? getStatusTone(pushSnapshot) : "info";
 
   return (
     <ScrollView
@@ -69,68 +132,116 @@ export default function SettingsScreen() {
           <View style={styles.deviceInfo}>
             <Text style={styles.deviceTitle}>Dispositivo</Text>
             <Text style={styles.deviceSub}>
-              {Platform.OS === "ios" ? "iPhone" : "Android"} • Expo Go
+              {Platform.OS === "ios" ? "iPhone" : "Android"} • {environmentLabel}
             </Text>
           </View>
         </View>
       </View>
 
       {/* Push Section */}
-      <Text style={styles.sectionLabel}>
-        NOTIFICACIONES PUSH (FCM)
-      </Text>
+      <Text style={styles.sectionLabel}>NOTIFICACIONES PUSH</Text>
 
       <View style={styles.card}>
-        {/* Toggle row */}
-        <View style={styles.toggleRow}>
-          <View style={styles.toggleInfo}>
-            <Text style={styles.toggleTitle}>Nuevas Licitaciones</Text>
-            <Text style={styles.toggleSub}>Recibe alertas en &lt; 30 seg</Text>
+        {loadingSnapshot && !pushSnapshot ? (
+          <View style={styles.loadingState}>
+            <ActivityIndicator color={colors.primary} />
+            <Text style={styles.loadingText}>Verificando estado de push...</Text>
           </View>
-          <TouchableOpacity
-            onPress={handleReRegister}
-            disabled={registering}
-            style={[
-              styles.toggle,
-              pushEnabled ? styles.toggleOn : styles.toggleOff,
-            ]}
-          >
+        ) : pushSnapshot ? (
+          <>
+            <View style={styles.statusHeader}>
+              <View style={styles.toggleInfo}>
+                <Text style={styles.toggleTitle}>Alertas de licitaciones</Text>
+                <Text style={styles.toggleSub}>{getStatusCopy(pushSnapshot)}</Text>
+              </View>
+              {pushSnapshot.capability === "supported" ? (
+                <TouchableOpacity
+                  onPress={handleReRegister}
+                  disabled={registering}
+                  style={[
+                    styles.actionButton,
+                    registering && styles.actionButtonDisabled,
+                  ]}
+                >
+                  <Text style={styles.actionButtonText}>
+                    {pushSnapshot.registrationStatus === "registered"
+                      ? "Re-sincronizar"
+                      : "Registrar push"}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
             <View
               style={[
-                styles.toggleThumb,
-                pushEnabled ? styles.toggleThumbOn : styles.toggleThumbOff,
+                styles.statusBanner,
+                bannerTone === "success" && styles.statusBannerSuccess,
+                bannerTone === "warning" && styles.statusBannerWarning,
+                bannerTone === "info" && styles.statusBannerInfo,
               ]}
-            />
-          </TouchableOpacity>
-        </View>
+            >
+              <Ionicons
+                name={
+                  bannerTone === "success"
+                    ? "checkmark-circle"
+                    : bannerTone === "warning"
+                      ? "warning"
+                      : "information-circle"
+                }
+                size={16}
+                color={
+                  bannerTone === "success"
+                    ? colors.success
+                    : bannerTone === "warning"
+                      ? colors.warning
+                      : colors.primary
+                }
+              />
+              <Text
+                style={[
+                  styles.statusText,
+                  bannerTone === "success" && styles.statusTextSuccess,
+                  bannerTone === "warning" && styles.statusTextWarning,
+                  bannerTone === "info" && styles.statusTextInfo,
+                ]}
+              >
+                <Text style={styles.statusBold}>
+                  {pushSnapshot.registrationStatus === "registered"
+                    ? "Token sincronizado."
+                    : pushSnapshot.registrationStatus === "permission_denied"
+                      ? "Permisos denegados."
+                      : pushSnapshot.registrationStatus === "unsupported_environment"
+                        ? "Expo Go no soporta registro."
+                        : pushSnapshot.registrationStatus === "unsupported_device"
+                          ? "Dispositivo no compatible."
+                          : "Pendiente de registro."}
+                </Text>
+                {"\n"}
+                {pushSnapshot.backendSyncStatus === "failed"
+                  ? `La sincronización con el backend falló${pushSnapshot.backendSyncError ? `: ${pushSnapshot.backendSyncError}` : "."}`
+                  : pushSnapshot.backendSyncStatus === "synced"
+                    ? "El backend quedó sincronizado con este estado."
+                    : "Este estado solo vive localmente hasta que se sincronice."}
+              </Text>
+            </View>
 
-        {/* Status message */}
-        {pushEnabled && (
-          <View style={styles.statusBanner}>
-            <Ionicons
-              name="checkmark-circle"
-              size={16}
-              color={colors.success}
-            />
-            <Text style={styles.statusText}>
-              <Text style={styles.statusBold}>Token FCM registrado en DB.</Text>
-              {"\n"}
-              El Worker detectará nuevas licitaciones mediante polling (cada 5 min)
-              y enviará un push a este dispositivo.
+            {__DEV__ && pushSnapshot.token ? (
+              <View style={styles.tokenCard}>
+                <Text style={styles.tokenLabel}>Push Token</Text>
+                <Text style={styles.tokenValue} selectable>
+                  {pushSnapshot.token}
+                </Text>
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <View style={styles.loadingState}>
+            <Text style={styles.loadingText}>
+              No se pudo leer el estado de push.
             </Text>
           </View>
         )}
       </View>
-
-      {/* Token (collapsible) */}
-      {token && (
-        <View style={styles.tokenCard}>
-          <Text style={styles.tokenLabel}>Push Token</Text>
-          <Text style={styles.tokenValue} selectable>
-            {token}
-          </Text>
-        </View>
-      )}
     </ScrollView>
   );
 }
@@ -198,11 +309,22 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
 
-  // Toggle
-  toggleRow: {
-    flexDirection: "row",
+  loadingState: {
+    padding: 20,
+    gap: 12,
     alignItems: "center",
+    justifyContent: "center",
+  },
+  loadingText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+
+  statusHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
     justifyContent: "space-between",
+    gap: 12,
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
@@ -218,76 +340,71 @@ const styles = StyleSheet.create({
   toggleSub: {
     fontSize: 12,
     color: colors.textSecondary,
-    marginTop: 2,
+    marginTop: 4,
+    lineHeight: 18,
   },
-  toggle: {
-    width: 48,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: "center",
-    padding: 2,
-  },
-  toggleOn: {
-    backgroundColor: colors.success,
-  },
-  toggleOff: {
-    backgroundColor: "#D1D5DB",
-  },
-  toggleThumb: {
-    width: 24,
-    height: 24,
+  actionButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: "#FFFFFF",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2,
-    elevation: 2,
+    backgroundColor: colors.primaryBg,
   },
-  toggleThumbOn: {
-    alignSelf: "flex-end",
+  actionButtonDisabled: {
+    opacity: 0.6,
   },
-  toggleThumbOff: {
-    alignSelf: "flex-start",
+  actionButtonText: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: "600",
   },
 
-  // Status banner
   statusBanner: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 8,
     padding: 16,
+  },
+  statusBannerSuccess: {
     backgroundColor: "rgba(5, 150, 105, 0.05)",
+  },
+  statusBannerWarning: {
+    backgroundColor: "rgba(245, 158, 11, 0.08)",
+  },
+  statusBannerInfo: {
+    backgroundColor: "rgba(59, 130, 246, 0.06)",
   },
   statusText: {
     fontSize: 12,
-    color: colors.success,
     lineHeight: 18,
     flex: 1,
+  },
+  statusTextSuccess: {
+    color: colors.success,
+  },
+  statusTextWarning: {
+    color: colors.warning,
+  },
+  statusTextInfo: {
+    color: colors.primary,
   },
   statusBold: {
     fontWeight: "700",
   },
 
-  // Token
   tokenCard: {
-    backgroundColor: colors.surfaceElevated,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 24,
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
   },
   tokenLabel: {
-    fontSize: 11,
-    color: colors.textMuted,
-    marginBottom: 4,
+    fontSize: 12,
     fontWeight: "600",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
+    color: colors.textSecondary,
+    marginBottom: 8,
   },
   tokenValue: {
     fontSize: 11,
-    color: colors.textSecondary,
+    color: colors.textPrimary,
     fontFamily: "monospace",
-    lineHeight: 16,
   },
 });

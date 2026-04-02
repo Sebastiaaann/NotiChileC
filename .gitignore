@@ -47,3 +47,4 @@ app-example
 .agents/
 openspec/
 skills-lock.json
+.atl/

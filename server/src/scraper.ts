@@ -2,6 +2,7 @@
 // Usa el endpoint interno del buscador web de mercadopublico.cl
 
 import type { ChileCompraSummaryItem, LicitacionRecord } from "./chilecompra";
+import { workerLogger } from "./observability/logger";
 
 const SEARCH_URL =
   "https://www.mercadopublico.cl/BuscarLicitacion/Home/Buscar";
@@ -56,6 +57,7 @@ export interface ScrapedLicitacion {
   fechaCierre: string;
   organismo: string | null;
   url: string | null;
+  rubro: string | null;
 }
 
 function parseHtmlLicitaciones(html: string): ScrapedLicitacion[] {
@@ -119,6 +121,15 @@ function parseHtmlLicitaciones(html: string): ScrapedLicitacion[] {
       /<div class="col-md-4"><strong>([^<]+)<\/strong>/
     );
 
+    const rubroRegex = /Rubro[^>]*>\s*([^<]+)/i;
+    const rubroSpan = new RegExp(
+      '<span[^>]*class="[^"]*rubro[^"]*"[^>]*>\\s*([^<]+)<',
+      "i"
+    );
+    const rubroText =
+      extractRegex(block, rubroRegex) ?? extractRegex(block, rubroSpan);
+    const rubro = rubroText?.match(/\b\d{8}\b/)?.[0] ?? null;
+
     // URL real de la ficha: verFicha('http://...')
     const url = extractRegex(
       block,
@@ -134,6 +145,7 @@ function parseHtmlLicitaciones(html: string): ScrapedLicitacion[] {
       fechaCierre,
       organismo: organismo ?? null,
       url: url ?? null,
+      rubro,
     });
   }
 
@@ -197,7 +209,8 @@ export function scrapedToRecord(scraped: ScrapedLicitacion): LicitacionRecord {
     estado: "Publicada",
     url: scraped.url ?? `https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion=${encodeURIComponent(scraped.codigoExterno)}`,
     region: null,
-    categoria: "General",
+    categoria: scraped.rubro ?? "General",
+    rubro_code: scraped.rubro,
   };
 }
 
@@ -247,9 +260,12 @@ export async function scrapeLicitaciones(
       });
 
       if (!response.ok) {
-        console.error(
-          `[scraper] Página ${pagina}: HTTP ${response.status}`
-        );
+        workerLogger.error("scraper_http_error", {
+          job: "ingest",
+          page: pagina,
+          error_code: "scraper_http_error",
+          status_code: response.status,
+        });
         continue;
       }
 
@@ -266,26 +282,32 @@ export async function scrapeLicitaciones(
       }
 
       const scraped = parseHtmlLicitaciones(html);
-      console.log(
-        `[scraper] Página ${pagina}: ${scraped.length} licitaciones parseadas`
-      );
+      workerLogger.info("scraper_page_parsed", {
+        job: "ingest",
+        page: pagina,
+        parsed_count: scraped.length,
+      });
 
       allItems.push(...scraped);
 
       // Si la página devolvió menos de 10, no hay más páginas
       if (scraped.length < 10) break;
     } catch (error) {
-      console.error(
-        `[scraper] Error en página ${pagina}:`,
-        error instanceof Error ? error.message : error
-      );
+      workerLogger.error("scraper_page_failed", {
+        job: "ingest",
+        page: pagina,
+        error_code: "scraper_page_failed",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
       break;
     }
   }
 
-  console.log(
-    `[scraper] Total scrapeado: ${allItems.length} licitaciones (${totalFound} en la web)`
-  );
+  workerLogger.info("scraper_total_completed", {
+    job: "ingest",
+    scraped_count: allItems.length,
+    total_found: totalFound,
+  });
 
   return {
     items: allItems,

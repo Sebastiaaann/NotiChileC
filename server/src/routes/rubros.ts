@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { query } from "../db";
+import { apiLogger } from "../observability/logger";
+import { captureException } from "../observability/sentry";
 
 const router = Router();
 
@@ -22,7 +24,12 @@ router.get("/", async (req, res) => {
       }))
     });
   } catch (error) {
-    console.error("[rubros] Error fetching rubros:", error);
+    captureException(error, { route: "/api/rubros", method: "GET" });
+    apiLogger.error("rubros_fetch_failed", {
+      route: "/api/rubros",
+      error_code: "rubros_fetch_failed",
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
     res.status(500).json({ error: "Internal server error" });
   }
 });

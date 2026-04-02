@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import { useLocalSearchParams, Stack } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { colors, tipoColors, tipoLabels } from "../../src/theme/colors";
+import { colors } from "../../src/theme/colors";
 import { fetchLicitacion, type Licitacion } from "../../src/services/api";
 
 // ── Helpers ─────────────────────────────────────────
