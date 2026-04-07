@@ -3,18 +3,22 @@ import { Stack, useRouter } from "expo-router";
 import * as Notifications from "expo-notifications";
 import { setupNotificationHandler } from "../src/services/push";
 import { bootstrapPushInstallation } from "../src/services/push-installation";
+import { isDemoApp } from "../src/services/app-env";
 
 // Configurar handler ANTES de que se monte el componente
 setupNotificationHandler();
 
 export default function RootLayout() {
+  const demoApp = isDemoApp();
   const router = useRouter();
   const notificationResponseListener =
     useRef<Notifications.EventSubscription | null>(null);
 
   useEffect(() => {
     void bootstrapPushInstallation().catch((error) => {
-      console.warn("[push] Error inicializando push:", error);
+      if (!demoApp) {
+        console.warn("[push] Error inicializando push:", error);
+      }
     });
 
     // Escuchar cuando el usuario toca una notificación
@@ -33,7 +37,7 @@ export default function RootLayout() {
         notificationResponseListener.current.remove();
       }
     };
-  }, [router]);
+  }, [demoApp, router]);
 
   return (
     <Stack

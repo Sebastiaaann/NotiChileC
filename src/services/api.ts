@@ -1,4 +1,15 @@
 import { Platform } from "react-native";
+import {
+  getDemoDataMode,
+  isDemoApp,
+} from "./app-env";
+import {
+  getDemoLicitacionById,
+  getDemoLicitaciones,
+  getDemoRegions,
+  getDemoRubros,
+  type DemoLicitacion,
+} from "./demo-data";
 import type { FeedFilters } from "./feed-filters";
 import type {
   InstallationPreferencesPayload,
@@ -62,6 +73,11 @@ export interface CursorPaginatedResponse {
   pageInfo: CursorPageInfo;
 }
 
+type DemoCursor = {
+  createdAt: string;
+  id: string;
+};
+
 // ── Helpers ─────────────────────────────────────────
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
@@ -81,6 +97,130 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+function demoModeUsesFallback(): boolean {
+  return isDemoApp() && getDemoDataMode() !== "live";
+}
+
+function demoModeForcesFallback(): boolean {
+  return isDemoApp() && getDemoDataMode() === "fallback";
+}
+
+function serializeDemoCursor(value: DemoCursor): string {
+  return encodeURIComponent(JSON.stringify(value));
+}
+
+function parseDemoCursor(value: string | null | undefined): DemoCursor | null {
+  if (!value) return null;
+
+  try {
+    const parsed = JSON.parse(decodeURIComponent(value)) as Partial<DemoCursor>;
+    if (
+      typeof parsed.createdAt !== "string" ||
+      typeof parsed.id !== "string"
+    ) {
+      return null;
+    }
+
+    return {
+      createdAt: parsed.createdAt,
+      id: parsed.id,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function compareDemoCursor(item: Pick<Licitacion, "createdAt" | "id">, cursor: DemoCursor) {
+  const createdAtDiff =
+    new Date(item.createdAt).getTime() - new Date(cursor.createdAt).getTime();
+
+  if (createdAtDiff !== 0) {
+    return createdAtDiff;
+  }
+
+  return item.id.localeCompare(cursor.id);
+}
+
+function paginateDemoLicitaciones(
+  items: Licitacion[],
+  limit: number,
+  cursor: string | null | undefined,
+  windowDays: number
+): CursorPaginatedResponse {
+  const decodedCursor = parseDemoCursor(cursor);
+  const filtered = decodedCursor
+    ? items.filter((item) => compareDemoCursor(item, decodedCursor) < 0)
+    : items;
+
+  const pageRows = filtered.slice(0, limit);
+  const hasMore = filtered.length > limit;
+  const nextCursor =
+    hasMore && pageRows.length > 0
+      ? serializeDemoCursor({
+          createdAt: pageRows[pageRows.length - 1]!.createdAt,
+          id: pageRows[pageRows.length - 1]!.id,
+        })
+      : null;
+
+  return {
+    data: pageRows,
+    pageInfo: {
+      limit,
+      hasMore,
+      nextCursor,
+      windowDays,
+      windowStart: new Date(
+        Date.now() - windowDays * 24 * 60 * 60 * 1000
+      ).toISOString(),
+    },
+  };
+}
+
+function mapDemoLicitacion(item: DemoLicitacion): Licitacion {
+  return {
+    id: item.id,
+    codigoExterno: item.codigoExterno,
+    nombre: item.nombre,
+    organismoNombre: item.organismoNombre,
+    tipo: item.tipo,
+    montoEstimado: item.montoEstimado,
+    montoLabel: item.montoLabel,
+    moneda: item.moneda,
+    fechaPublicacion: item.fechaPublicacion,
+    fechaCierre: item.fechaCierre,
+    estado: item.estado,
+    url: item.url,
+    region: item.region,
+    categoria: item.categoria,
+    createdAt: item.createdAt,
+  };
+}
+
+async function withDemoFallback<T>(
+  liveCall: () => Promise<T>,
+  fallback: () => T,
+  shouldFallback: (value: T) => boolean = () => false
+): Promise<T> {
+  if (demoModeForcesFallback()) {
+    return fallback();
+  }
+
+  try {
+    const value = await liveCall();
+    if (demoModeUsesFallback() && shouldFallback(value)) {
+      return fallback();
+    }
+
+    return value;
+  } catch (error) {
+    if (demoModeUsesFallback()) {
+      return fallback();
+    }
+
+    throw error;
+  }
 }
 
 // ── API pública ─────────────────────────────────────
@@ -167,9 +307,21 @@ export async function fetchLicitaciones(
     filters?: Partial<FeedFilters>;
   } = {}
 ): Promise<CursorPaginatedResponse> {
+  const limit = options.limit ?? 20;
+  const windowDays = options.windowDays ?? 90;
+
+  if (demoModeForcesFallback()) {
+    return paginateDemoLicitaciones(
+      getDemoLicitaciones(options.filters).map(mapDemoLicitacion),
+      limit,
+      options.cursor,
+      windowDays
+    );
+  }
+
   const params = new URLSearchParams({
-    limit: String(options.limit ?? 20),
-    windowDays: String(options.windowDays ?? 90),
+    limit: String(limit),
+    windowDays: String(windowDays),
   });
 
   if (options.cursor) {
@@ -192,17 +344,34 @@ export async function fetchLicitaciones(
     params.append("montoMax", String(options.filters.montoMax));
   }
 
-  return fetchApi<CursorPaginatedResponse>(
-    `/api/licitaciones?${params.toString()}`
+  return withDemoFallback(
+    () =>
+      fetchApi<CursorPaginatedResponse>(`/api/licitaciones?${params.toString()}`),
+    () =>
+      paginateDemoLicitaciones(
+        getDemoLicitaciones(options.filters).map(mapDemoLicitacion),
+        limit,
+        options.cursor,
+        windowDays
+      ),
+    (response) => response.data.length === 0
   );
 }
 
 export async function fetchRubros(): Promise<{ data: Rubro[] }> {
-  return fetchApi<{ data: Rubro[] }>("/api/rubros");
+  return withDemoFallback(
+    () => fetchApi<{ data: Rubro[] }>("/api/rubros"),
+    () => ({ data: getDemoRubros() }),
+    (response) => response.data.length === 0
+  );
 }
 
 export async function fetchRegions(): Promise<{ data: RegionOption[] }> {
-  return fetchApi<{ data: RegionOption[] }>("/api/licitaciones/regions");
+  return withDemoFallback(
+    () => fetchApi<{ data: RegionOption[] }>("/api/licitaciones/regions"),
+    () => ({ data: getDemoRegions() }),
+    (response) => response.data.length === 0
+  );
 }
 
 /**
@@ -211,5 +380,18 @@ export async function fetchRegions(): Promise<{ data: RegionOption[] }> {
 export async function fetchLicitacion(
   id: string
 ): Promise<{ data: Licitacion }> {
-  return fetchApi<{ data: Licitacion }>(`/api/licitaciones/${encodeURIComponent(id)}`);
+  return withDemoFallback(
+    () =>
+      fetchApi<{ data: Licitacion }>(
+        `/api/licitaciones/${encodeURIComponent(id)}`
+      ),
+    () => {
+      const fallback = getDemoLicitacionById(id);
+      if (!fallback) {
+        throw new Error("Licitación demo no encontrada");
+      }
+
+      return { data: mapDemoLicitacion(fallback) };
+    }
+  );
 }

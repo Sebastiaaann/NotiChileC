@@ -10,12 +10,18 @@ async function main() {
 
   try {
     const summary = await runArchiveExportCycle({
-      query: async (text, params = []) => {
-        const result = await pool.query(text, params);
-        return result.rows as Record<string, unknown>[];
+      query: async <T extends Record<string, unknown>>(
+        text: string,
+        params: unknown[] = []
+      ) => {
+        const result = await pool.query<T>(text, params);
+        return result.rows;
       },
-      queryResult: async (text, params = []) => {
-        return pool.query(text, params);
+      queryResult: async <T extends Record<string, unknown>>(
+        text: string,
+        params: unknown[] = []
+      ) => {
+        return pool.query<T>(text, params);
       },
     });
 

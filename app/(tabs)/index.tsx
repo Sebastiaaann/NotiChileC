@@ -28,6 +28,7 @@ import {
   sanitizeFeedFilters,
   type FeedFilters,
 } from "../../src/services/feed-filters";
+import { isDemoApp } from "../../src/services/app-env";
 import { feedFiltersStorage } from "../../src/services/feed-filters-storage";
 import { syncFeedFiltersPreferences } from "../../src/services/push-installation";
 
@@ -71,6 +72,7 @@ function mergeUniqueLicitaciones(
 
 export default function LicitacionesFeed() {
   const router = useRouter();
+  const demoApp = isDemoApp();
   const [licitaciones, setLicitaciones] = useState<Licitacion[]>([]);
   const [rubros, setRubros] = useState<Rubro[]>([]);
   const [regions, setRegions] = useState<RegionOption[]>([]);
@@ -93,11 +95,15 @@ export default function LicitacionesFeed() {
         const [rubrosResponse, regionsResponse, storedFilters] =
           await Promise.all([
             fetchRubros().catch((err) => {
-              console.error("[feed] Error cargando rubros:", err);
+              if (!demoApp) {
+                console.error("[feed] Error cargando rubros:", err);
+              }
               return { data: [] as Rubro[] };
             }),
             fetchRegions().catch((err) => {
-              console.error("[feed] Error cargando regiones:", err);
+              if (!demoApp) {
+                console.error("[feed] Error cargando regiones:", err);
+              }
               return { data: [] as RegionOption[] };
             }),
             feedFiltersStorage.getItem(FEED_FILTERS_STORAGE_KEY),
@@ -113,7 +119,9 @@ export default function LicitacionesFeed() {
           setFilters(sanitizeFeedFilters(parsed));
         }
       } catch (err) {
-        console.error("[feed] Error inicializando filtros:", err);
+        if (!demoApp) {
+          console.error("[feed] Error inicializando filtros:", err);
+        }
       } finally {
         if (!cancelled) {
           setHydrated(true);
@@ -317,17 +325,25 @@ export default function LicitacionesFeed() {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loadingText}>Cargando licitaciones...</Text>
+        <Text style={styles.loadingText}>
+          {demoApp ? "Preparando la demo..." : "Cargando licitaciones..."}
+        </Text>
       </View>
     );
   }
 
   if (error && licitaciones.length === 0) {
     return (
-      <View style={styles.center}>
-        <Ionicons name="cloud-offline-outline" size={48} color={colors.error} />
-        <Text style={styles.errorTitle}>Error de conexión</Text>
-        <Text style={styles.errorText}>{error}</Text>
+        <View style={styles.center}>
+          <Ionicons name="cloud-offline-outline" size={48} color={colors.error} />
+          <Text style={styles.errorTitle}>
+            {demoApp ? "No pudimos actualizar la demo" : "Error de conexión"}
+          </Text>
+          <Text style={styles.errorText}>
+            {demoApp
+              ? "Mostremos una versión segura y estable. Reintentá cuando quieras para refrescar los datos."
+              : error}
+          </Text>
         <TouchableOpacity
           style={styles.retryButton}
           onPress={() =>
@@ -564,7 +580,11 @@ export default function LicitacionesFeed() {
               color={colors.primary}
             />
           ) : licitaciones.length > 0 ? (
-            <Text style={styles.endText}>No hay más licitaciones</Text>
+            <Text style={styles.endText}>
+              {demoApp
+                ? "Ya viste todas las licitaciones preparadas para la demo"
+                : "No hay más licitaciones"}
+            </Text>
           ) : null
         }
         ListEmptyComponent={
@@ -576,8 +596,12 @@ export default function LicitacionesFeed() {
             />
             <Text style={styles.emptyText}>
               {activeFilters
-                ? "No hay licitaciones para estos filtros."
-                : "Aún no hay licitaciones. El worker está buscando..."}
+                ? demoApp
+                  ? "No encontramos coincidencias para esos filtros en esta demo."
+                  : "No hay licitaciones para estos filtros."
+                : demoApp
+                  ? "Estamos preparando licitaciones representativas para mostrarte."
+                  : "Aún no hay licitaciones. El worker está buscando..."}
             </Text>
             {activeFilters ? (
               <TouchableOpacity

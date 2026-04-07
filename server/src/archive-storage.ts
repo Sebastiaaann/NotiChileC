@@ -23,6 +23,10 @@ export interface UploadedArchiveObject {
 }
 
 export function getArchiveStorageConfig(): ArchiveStorageConfig | null {
+  if (process.env.DEMO_DISABLE_ARCHIVE_EXPORT === "true") {
+    return null;
+  }
+
   const bucket = process.env.ARCHIVE_BUCKET;
   if (!bucket) return null;
 

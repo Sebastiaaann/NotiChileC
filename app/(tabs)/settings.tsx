@@ -16,8 +16,16 @@ import {
   getCachedPushInstallationSnapshot,
   type PushInstallationSnapshot,
 } from "../../src/services/push-installation";
+import { isDemoApp } from "../../src/services/app-env";
 
-function getEnvironmentLabel(environment: PushInstallationSnapshot["environment"]) {
+function getEnvironmentLabel(
+  environment: PushInstallationSnapshot["environment"],
+  demoApp: boolean
+) {
+  if (demoApp) {
+    return "Demo controlada";
+  }
+
   switch (environment) {
     case "expo-go":
       return "Expo Go";
@@ -28,7 +36,22 @@ function getEnvironmentLabel(environment: PushInstallationSnapshot["environment"
   }
 }
 
-function getStatusCopy(snapshot: PushInstallationSnapshot) {
+function getStatusCopy(snapshot: PushInstallationSnapshot, demoApp: boolean) {
+  if (demoApp) {
+    switch (snapshot.registrationStatus) {
+      case "registered":
+        return "Este iPhone está listo para recibir alertas durante la demo.";
+      case "permission_denied":
+        return "Los permisos de notificación están bloqueados. Habilitalos antes de mostrar la demo.";
+      case "unsupported_environment":
+        return "Para la demo usá la build instalada en tu iPhone, no Expo Go.";
+      case "unsupported_device":
+        return "La demo con notificaciones necesita un dispositivo físico.";
+      case "not_registered":
+        return "Todavía no registramos este dispositivo para las alertas demo.";
+    }
+  }
+
   switch (snapshot.registrationStatus) {
     case "registered":
       return "Este dispositivo ya quedó sincronizado con el backend y puede recibir alertas.";
@@ -50,6 +73,7 @@ function getStatusTone(snapshot: PushInstallationSnapshot) {
 }
 
 export default function SettingsScreen() {
+  const demoApp = isDemoApp();
   const [pushSnapshot, setPushSnapshot] =
     useState<PushInstallationSnapshot | null>(null);
   const [loadingSnapshot, setLoadingSnapshot] = useState(true);
@@ -57,8 +81,8 @@ export default function SettingsScreen() {
 
   const environmentLabel = useMemo(() => {
     if (!pushSnapshot) return "—";
-    return getEnvironmentLabel(pushSnapshot.environment);
-  }, [pushSnapshot]);
+    return getEnvironmentLabel(pushSnapshot.environment, demoApp);
+  }, [pushSnapshot, demoApp]);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,7 +115,7 @@ export default function SettingsScreen() {
     if (pushSnapshot.capability !== "supported") {
       Alert.alert(
         "Push no disponible",
-        getStatusCopy(pushSnapshot)
+        getStatusCopy(pushSnapshot, demoApp)
       );
       return;
     }
@@ -104,7 +128,7 @@ export default function SettingsScreen() {
       if (snapshot.registrationStatus === "registered") {
         Alert.alert("Listo", "Push sincronizado correctamente.");
       } else {
-        Alert.alert("Estado de push", getStatusCopy(snapshot));
+        Alert.alert("Estado de push", getStatusCopy(snapshot, demoApp));
       }
     } catch (error) {
       Alert.alert(
@@ -152,7 +176,9 @@ export default function SettingsScreen() {
             <View style={styles.statusHeader}>
               <View style={styles.toggleInfo}>
                 <Text style={styles.toggleTitle}>Alertas de licitaciones</Text>
-                <Text style={styles.toggleSub}>{getStatusCopy(pushSnapshot)}</Text>
+                <Text style={styles.toggleSub}>
+                  {getStatusCopy(pushSnapshot, demoApp)}
+                </Text>
               </View>
               {pushSnapshot.capability === "supported" ? (
                 <TouchableOpacity
@@ -204,26 +230,38 @@ export default function SettingsScreen() {
                   bannerTone === "warning" && styles.statusTextWarning,
                   bannerTone === "info" && styles.statusTextInfo,
                 ]}
-              >
-                <Text style={styles.statusBold}>
-                  {pushSnapshot.registrationStatus === "registered"
-                    ? "Token sincronizado."
-                    : pushSnapshot.registrationStatus === "permission_denied"
-                      ? "Permisos denegados."
-                      : pushSnapshot.registrationStatus === "unsupported_environment"
-                        ? "Expo Go no soporta registro."
-                        : pushSnapshot.registrationStatus === "unsupported_device"
-                          ? "Dispositivo no compatible."
-                          : "Pendiente de registro."}
+                >
+                  <Text style={styles.statusBold}>
+                    {pushSnapshot.registrationStatus === "registered"
+                      ? demoApp
+                        ? "Dispositivo listo para la demo."
+                        : "Token sincronizado."
+                      : pushSnapshot.registrationStatus === "permission_denied"
+                        ? "Permisos denegados."
+                        : pushSnapshot.registrationStatus === "unsupported_environment"
+                          ? demoApp
+                            ? "Usá la build de demo en tu iPhone."
+                            : "Expo Go no soporta registro."
+                          : pushSnapshot.registrationStatus === "unsupported_device"
+                            ? "Dispositivo no compatible."
+                            : demoApp
+                              ? "Pendiente de preparar el iPhone para la demo."
+                              : "Pendiente de registro."}
+                  </Text>
+                  {"\n"}
+                  {pushSnapshot.backendSyncStatus === "failed"
+                    ? demoApp
+                      ? "No pudimos sincronizar este estado con el backend demo todavía."
+                      : `La sincronización con el backend falló${pushSnapshot.backendSyncError ? `: ${pushSnapshot.backendSyncError}` : "."}`
+                    : pushSnapshot.backendSyncStatus === "synced"
+                      ? demoApp
+                        ? "El backend demo ya reconoce este dispositivo."
+                        : "El backend quedó sincronizado con este estado."
+                      : demoApp
+                        ? "Este estado todavía no se sincronizó con el backend demo."
+                        : "Este estado solo vive localmente hasta que se sincronice."}
                 </Text>
-                {"\n"}
-                {pushSnapshot.backendSyncStatus === "failed"
-                  ? `La sincronización con el backend falló${pushSnapshot.backendSyncError ? `: ${pushSnapshot.backendSyncError}` : "."}`
-                  : pushSnapshot.backendSyncStatus === "synced"
-                    ? "El backend quedó sincronizado con este estado."
-                    : "Este estado solo vive localmente hasta que se sincronice."}
-              </Text>
-            </View>
+              </View>
 
             {__DEV__ && pushSnapshot.token ? (
               <View style={styles.tokenCard}>

@@ -8,10 +8,11 @@ import {
   ActivityIndicator,
   Linking,
 } from "react-native";
-import { useLocalSearchParams, Stack } from "expo-router";
+import { useLocalSearchParams, Stack, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../src/theme/colors";
 import { fetchLicitacion, type Licitacion } from "../../src/services/api";
+import { isDemoApp } from "../../src/services/app-env";
 
 // ── Helpers ─────────────────────────────────────────
 
@@ -51,6 +52,8 @@ function formatFecha(fecha: string | null): string {
 // ── Component ───────────────────────────────────────
 
 export default function LicitacionDetail() {
+  const demoApp = isDemoApp();
+  const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [licitacion, setLicitacion] = useState<Licitacion | null>(null);
   const [loading, setLoading] = useState(true);
@@ -86,7 +89,12 @@ export default function LicitacionDetail() {
   if (error || !licitacion) {
     return (
       <>
-        <Stack.Screen options={{ headerShown: true, title: "Error" }} />
+        <Stack.Screen
+          options={{
+            headerShown: true,
+            title: demoApp ? "Detalle demo" : "Error",
+          }}
+        />
         <View style={styles.center}>
           <Ionicons
             name="alert-circle-outline"
@@ -94,8 +102,18 @@ export default function LicitacionDetail() {
             color={colors.error}
           />
           <Text style={styles.errorText}>
-            {error ?? "Licitación no encontrada"}
+            {demoApp
+              ? "No pudimos abrir esta licitación de la demo. Volvé al feed para seguir mostrando el flujo principal."
+              : error ?? "Licitación no encontrada"}
           </Text>
+          {demoApp ? (
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => router.replace("/(tabs)")}
+            >
+              <Text style={styles.backButtonText}>Volver al inicio</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </>
     );
@@ -266,6 +284,17 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     textAlign: "center",
     marginTop: 12,
+  },
+  backButton: {
+    marginTop: 16,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 14,
+  },
+  backButtonText: {
+    color: colors.textOnPrimary,
+    fontWeight: "600",
   },
 
   // Code badge

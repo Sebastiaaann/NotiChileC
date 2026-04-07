@@ -91,10 +91,19 @@ describe("archive jobs", () => {
 
     const queryResult = vi.fn(async (sql: string, params?: unknown[]) => {
       writes.push({ sql, params });
-      return { rowCount: 1, rows: [] };
+      return {
+        rowCount: 1,
+        rows: [],
+        command: "INSERT",
+        oid: 0,
+        fields: [],
+      };
     });
 
-    const summary = await runArchiveExportCycle({ query, queryResult });
+    const summary = await runArchiveExportCycle({
+      query: query as never,
+      queryResult: queryResult as never,
+    });
 
     expect(summary.exported).toBe(1);
     expect(summary.verified).toBe(1);
