@@ -45,7 +45,9 @@ app-example
 .env
 
 # Agent tools
-.agents/
+.agents/*
+!.agents/skills/
+!.agents/skills/**
 openspec/
 skills-lock.json
 .atl/
