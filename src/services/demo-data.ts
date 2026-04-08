@@ -1,4 +1,9 @@
 import type { FeedFilters } from "./feed-filters";
+import {
+  DEFAULT_FEED_SORT_MODE,
+  compareLicitacionesBySortMode,
+  type FeedSortMode,
+} from "./feed-sort";
 
 export interface DemoLicitacion {
   id: string;
@@ -142,7 +147,10 @@ export function getDemoLicitacionById(id: string) {
   ) ?? null;
 }
 
-export function getDemoLicitaciones(filters?: Partial<FeedFilters>) {
+export function getDemoLicitaciones(
+  filters?: Partial<FeedFilters>,
+  sortMode: FeedSortMode = DEFAULT_FEED_SORT_MODE
+) {
   return DEMO_LICITACIONES.filter((item) => {
     if (filters?.rubro && DEMO_RUBRO_BY_LICITACION[item.id] !== filters.rubro) {
       return false;
@@ -173,5 +181,5 @@ export function getDemoLicitaciones(filters?: Partial<FeedFilters>) {
     }
 
     return true;
-  }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }).sort((a, b) => compareLicitacionesBySortMode(a, b, sortMode));
 }

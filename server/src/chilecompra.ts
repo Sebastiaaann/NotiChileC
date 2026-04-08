@@ -60,6 +60,7 @@ export interface LicitacionRecord {
   region: string | null;
   categoria: string;
   rubro_code: string | null;
+  source_rank: number | null;
 }
 
 // ── Helpers ─────────────────────────────────────────────
@@ -279,5 +280,6 @@ export function mapDetailToRecord(
     region: normalizeText(detail.Comprador?.RegionUnidad),
     categoria: extractCategoria(detail),
     rubro_code: extractRubroCode(detail),
+    source_rank: null,
   };
 }

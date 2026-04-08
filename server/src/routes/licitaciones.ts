@@ -1,6 +1,11 @@
 import { Buffer } from "node:buffer";
 import { Router, type Request, type Response } from "express";
 import { query, queryOne } from "../db";
+import {
+  DEFAULT_FEED_SORT_MODE,
+  isFeedSortMode,
+  type FeedSortMode,
+} from "../feed-sort";
 import { apiLogger } from "../observability/logger";
 import { captureException } from "../observability/sentry";
 
@@ -9,6 +14,7 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 const DEFAULT_WINDOW_DAYS = 90;
 const MAX_WINDOW_DAYS = 365;
+const FAR_PAST_RANK = -253402300799999;
 
 interface LicitacionRow extends Record<string, unknown> {
   id: string;
@@ -25,6 +31,7 @@ interface LicitacionRow extends Record<string, unknown> {
   url: string | null;
   region: string | null;
   categoria: string;
+  source_rank: number | null;
   created_at: string;
 }
 
@@ -36,9 +43,35 @@ interface LicitacionesFilters {
   montoMax?: number;
 }
 
-interface FeedCursor {
-  createdAt: string;
-  id: string;
+type FeedCursor =
+  | {
+      mode: "latest_published";
+      primaryDate: string;
+      rankSort: number;
+      createdAt: string;
+      id: string;
+    }
+  | {
+      mode: "most_relevant";
+      relevanceBucket: number;
+      montoRank: number;
+      primaryDate: string;
+      createdAt: string;
+      id: string;
+    }
+  | {
+      mode: "closing_soon";
+      activeBucket: number;
+      closingRank: number;
+      primaryDate: string;
+      createdAt: string;
+      id: string;
+    };
+
+interface BuildWhereResult {
+  whereClause: string;
+  params: unknown[];
+  paramIndex: number;
 }
 
 function normalizeStringFilter(value: unknown): string | undefined {
@@ -63,6 +96,12 @@ function readFilters(req: Request): LicitacionesFilters {
   };
 }
 
+function readSortMode(req: Request): FeedSortMode {
+  return isFeedSortMode(req.query.sortMode)
+    ? req.query.sortMode
+    : DEFAULT_FEED_SORT_MODE;
+}
+
 function readLimit(req: Request): number {
   return Math.min(MAX_LIMIT, Math.max(1, Number(req.query.limit) || DEFAULT_LIMIT));
 }
@@ -74,6 +113,14 @@ function readWindowDays(req: Request): number {
   );
 }
 
+function isIsoDate(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function decodeCursor(value: unknown): FeedCursor | null {
   if (typeof value !== "string" || value.trim().length === 0) return null;
 
@@ -81,16 +128,62 @@ function decodeCursor(value: unknown): FeedCursor | null {
     const decoded = Buffer.from(value, "base64url").toString("utf8");
     const parsed = JSON.parse(decoded) as Partial<FeedCursor>;
 
+    if (!parsed || !isFeedSortMode(parsed.mode) || typeof parsed.id !== "string") {
+      return null;
+    }
+
+    if (parsed.mode === "latest_published") {
+      if (
+        !isIsoDate(parsed.primaryDate) ||
+        !isFiniteNumber(parsed.rankSort) ||
+        !isIsoDate(parsed.createdAt)
+      ) {
+        return null;
+      }
+
+      return {
+        mode: parsed.mode,
+        primaryDate: parsed.primaryDate,
+        rankSort: parsed.rankSort,
+        createdAt: parsed.createdAt,
+        id: parsed.id,
+      };
+    }
+
+    if (parsed.mode === "most_relevant") {
+      if (
+        !isFiniteNumber(parsed.relevanceBucket) ||
+        !isFiniteNumber(parsed.montoRank) ||
+        !isIsoDate(parsed.primaryDate) ||
+        !isIsoDate(parsed.createdAt)
+      ) {
+        return null;
+      }
+
+      return {
+        mode: parsed.mode,
+        relevanceBucket: parsed.relevanceBucket,
+        montoRank: parsed.montoRank,
+        primaryDate: parsed.primaryDate,
+        createdAt: parsed.createdAt,
+        id: parsed.id,
+      };
+    }
+
     if (
-      typeof parsed.createdAt !== "string" ||
-      typeof parsed.id !== "string" ||
-      Number.isNaN(Date.parse(parsed.createdAt)) ||
-      parsed.id.trim().length === 0
+      !isFiniteNumber(parsed.activeBucket) ||
+      !isFiniteNumber(parsed.closingRank) ||
+      !isIsoDate(parsed.primaryDate) ||
+      !isIsoDate(parsed.createdAt)
     ) {
       return null;
     }
 
     return {
+      mode: parsed.mode,
+      activeBucket: parsed.activeBucket,
+      closingRank: parsed.closingRank,
+      primaryDate: parsed.primaryDate,
       createdAt: parsed.createdAt,
       id: parsed.id,
     };
@@ -99,68 +192,281 @@ function decodeCursor(value: unknown): FeedCursor | null {
   }
 }
 
-function encodeCursor(row: Pick<LicitacionRow, "created_at" | "id">): string {
-  return Buffer.from(
-    JSON.stringify({
-      createdAt: row.created_at,
-      id: row.id,
-    }),
-    "utf8"
-  ).toString("base64url");
+function getPrimaryDate(row: Pick<LicitacionRow, "fecha_publicacion" | "created_at">): string {
+  return row.fecha_publicacion ?? row.created_at;
 }
 
-function buildWhereClause(filters: LicitacionesFilters, windowStart: Date, cursor: FeedCursor | null) {
-  let whereClause = "WHERE created_at >= $1";
-  const params: unknown[] = [windowStart.toISOString()];
-  let paramIndex = 2;
+function getRankSort(row: Pick<LicitacionRow, "source_rank">): number {
+  return row.source_rank === null ? -2147483647 : -row.source_rank;
+}
 
+function getRelevanceBucket(row: Pick<LicitacionRow, "estado" | "fecha_cierre">): number {
+  if (row.estado !== "Publicada") return 0;
+  if (!row.fecha_cierre) return 1;
+  return new Date(row.fecha_cierre).getTime() >= Date.now() ? 1 : 0;
+}
+
+function getMontoRank(row: Pick<LicitacionRow, "monto_estimado">): number {
+  return row.monto_estimado ? Number(row.monto_estimado) : 0;
+}
+
+function getActiveBucket(row: Pick<LicitacionRow, "estado" | "fecha_cierre">): number {
+  return getRelevanceBucket(row);
+}
+
+function getClosingRank(row: Pick<LicitacionRow, "estado" | "fecha_cierre">): number {
+  if (getActiveBucket(row) !== 1) return FAR_PAST_RANK;
+  if (!row.fecha_cierre) return FAR_PAST_RANK;
+
+  const closingAt = new Date(row.fecha_cierre).getTime();
+  return Number.isFinite(closingAt) ? -closingAt : FAR_PAST_RANK;
+}
+
+function encodeCursor(row: LicitacionRow, sortMode: FeedSortMode): string {
+  const primaryDate = getPrimaryDate(row);
+
+  const payload: FeedCursor =
+    sortMode === "closing_soon"
+      ? {
+          mode: sortMode,
+          activeBucket: getActiveBucket(row),
+          closingRank: getClosingRank(row),
+          primaryDate,
+          createdAt: row.created_at,
+          id: row.id,
+        }
+      : sortMode === "most_relevant"
+        ? {
+            mode: sortMode,
+            relevanceBucket: getRelevanceBucket(row),
+            montoRank: getMontoRank(row),
+            primaryDate,
+            createdAt: row.created_at,
+            id: row.id,
+          }
+        : {
+            mode: sortMode,
+            primaryDate,
+            rankSort: getRankSort(row),
+            createdAt: row.created_at,
+            id: row.id,
+          };
+
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+function appendBaseFilters(
+  filters: LicitacionesFilters,
+  params: unknown[],
+  whereParts: string[]
+) {
   if (filters.rubro) {
-    whereClause += ` AND rubro_code LIKE $${paramIndex}`;
     params.push(`${filters.rubro}%`);
-    paramIndex++;
+    whereParts.push(`rubro_code LIKE $${params.length}`);
   }
 
   if (filters.tipo) {
-    whereClause += ` AND tipo = $${paramIndex}`;
     params.push(filters.tipo);
-    paramIndex++;
+    whereParts.push(`tipo = $${params.length}`);
   }
 
   if (filters.region) {
-    whereClause += ` AND region = $${paramIndex}`;
     params.push(filters.region);
-    paramIndex++;
+    whereParts.push(`region = $${params.length}`);
   }
 
   if (filters.montoMin !== undefined) {
-    whereClause += ` AND monto_estimado IS NOT NULL AND monto_estimado >= $${paramIndex}`;
     params.push(filters.montoMin);
-    paramIndex++;
+    whereParts.push(`monto_estimado IS NOT NULL AND monto_estimado >= $${params.length}`);
   }
 
   if (filters.montoMax !== undefined) {
-    whereClause += ` AND monto_estimado IS NOT NULL AND monto_estimado <= $${paramIndex}`;
     params.push(filters.montoMax);
-    paramIndex++;
+    whereParts.push(`monto_estimado IS NOT NULL AND monto_estimado <= $${params.length}`);
   }
+}
+
+function buildLatestPublishedWhere(
+  filters: LicitacionesFilters,
+  windowStart: Date,
+  cursor: FeedCursor | null
+): BuildWhereResult {
+  const params: unknown[] = [windowStart.toISOString()];
+  const whereParts = ["COALESCE(fecha_publicacion, created_at) >= $1"];
+
+  appendBaseFilters(filters, params, whereParts);
 
   if (cursor) {
-    whereClause += ` AND (created_at, id) < ($${paramIndex}::timestamptz, $${paramIndex + 1})`;
-    params.push(cursor.createdAt, cursor.id);
-    paramIndex += 2;
+    if (cursor.mode !== "latest_published") {
+      throw new Error("Cursor no coincide con latest_published");
+    }
+
+    params.push(cursor.primaryDate, cursor.createdAt, cursor.id);
+    params.splice(params.length - 2, 0, cursor.rankSort);
+    const start = params.length - 3;
+    whereParts.push(
+      `(COALESCE(fecha_publicacion, created_at),
+        COALESCE(-source_rank, -2147483647),
+        created_at,
+        id) < ($${start}::timestamptz, $${start + 1}, $${start + 2}::timestamptz, $${start + 3})`
+    );
   }
 
-  return { whereClause, params, paramIndex };
+  return {
+    whereClause: `WHERE ${whereParts.join(" AND ")}`,
+    params,
+    paramIndex: params.length + 1,
+  };
+}
+
+function buildMostRelevantWhere(
+  filters: LicitacionesFilters,
+  windowStart: Date,
+  cursor: FeedCursor | null
+): BuildWhereResult {
+  const params: unknown[] = [windowStart.toISOString()];
+  const whereParts = ["COALESCE(fecha_publicacion, created_at) >= $1"];
+
+  appendBaseFilters(filters, params, whereParts);
+
+  if (cursor) {
+    if (cursor.mode !== "most_relevant") {
+      throw new Error("Cursor no coincide con most_relevant");
+    }
+
+    params.push(
+      cursor.relevanceBucket,
+      cursor.montoRank,
+      cursor.primaryDate,
+      cursor.createdAt,
+      cursor.id
+    );
+    const start = params.length - 4;
+    whereParts.push(
+      `(
+        CASE
+          WHEN estado = 'Publicada' AND (fecha_cierre IS NULL OR fecha_cierre >= NOW()) THEN 1
+          ELSE 0
+        END,
+        COALESCE(monto_estimado, 0),
+        COALESCE(fecha_publicacion, created_at),
+        created_at,
+        id
+      ) < ($${start}, $${start + 1}, $${start + 2}::timestamptz, $${start + 3}::timestamptz, $${start + 4})`
+    );
+  }
+
+  return {
+    whereClause: `WHERE ${whereParts.join(" AND ")}`,
+    params,
+    paramIndex: params.length + 1,
+  };
+}
+
+function buildClosingSoonWhere(
+  filters: LicitacionesFilters,
+  windowStart: Date,
+  cursor: FeedCursor | null
+): BuildWhereResult {
+  const params: unknown[] = [windowStart.toISOString()];
+  const whereParts = ["COALESCE(fecha_publicacion, created_at) >= $1"];
+
+  appendBaseFilters(filters, params, whereParts);
+
+  if (cursor) {
+    if (cursor.mode !== "closing_soon") {
+      throw new Error("Cursor no coincide con closing_soon");
+    }
+
+    params.push(
+      cursor.activeBucket,
+      cursor.closingRank,
+      cursor.primaryDate,
+      cursor.createdAt,
+      cursor.id
+    );
+    const start = params.length - 4;
+    whereParts.push(
+      `(
+        CASE
+          WHEN estado = 'Publicada' AND (fecha_cierre IS NULL OR fecha_cierre >= NOW()) THEN 1
+          ELSE 0
+        END,
+        CASE
+          WHEN estado = 'Publicada' AND fecha_cierre IS NOT NULL AND fecha_cierre >= NOW()
+            THEN -EXTRACT(EPOCH FROM fecha_cierre) * 1000
+          ELSE ${FAR_PAST_RANK}
+        END,
+        COALESCE(fecha_publicacion, created_at),
+        created_at,
+        id
+      ) < ($${start}, $${start + 1}, $${start + 2}::timestamptz, $${start + 3}::timestamptz, $${start + 4})`
+    );
+  }
+
+  return {
+    whereClause: `WHERE ${whereParts.join(" AND ")}`,
+    params,
+    paramIndex: params.length + 1,
+  };
+}
+
+function buildQueryParts(
+  sortMode: FeedSortMode,
+  filters: LicitacionesFilters,
+  windowStart: Date,
+  cursor: FeedCursor | null
+) {
+  if (sortMode === "closing_soon") {
+    return {
+      ...buildClosingSoonWhere(filters, windowStart, cursor),
+      orderBy: `ORDER BY
+        CASE
+          WHEN estado = 'Publicada' AND (fecha_cierre IS NULL OR fecha_cierre >= NOW()) THEN 1
+          ELSE 0
+        END DESC,
+        CASE
+          WHEN estado = 'Publicada' AND fecha_cierre IS NOT NULL AND fecha_cierre >= NOW()
+            THEN -EXTRACT(EPOCH FROM fecha_cierre) * 1000
+          ELSE ${FAR_PAST_RANK}
+        END DESC,
+        COALESCE(fecha_publicacion, created_at) DESC,
+        created_at DESC,
+        id DESC`,
+    };
+  }
+
+  if (sortMode === "most_relevant") {
+    return {
+      ...buildMostRelevantWhere(filters, windowStart, cursor),
+      orderBy: `ORDER BY
+        CASE
+          WHEN estado = 'Publicada' AND (fecha_cierre IS NULL OR fecha_cierre >= NOW()) THEN 1
+          ELSE 0
+        END DESC,
+        COALESCE(monto_estimado, 0) DESC,
+        COALESCE(fecha_publicacion, created_at) DESC,
+        created_at DESC,
+        id DESC`,
+    };
+  }
+
+  return {
+      ...buildLatestPublishedWhere(filters, windowStart, cursor),
+    orderBy:
+      "ORDER BY COALESCE(fecha_publicacion, created_at) DESC, COALESCE(-source_rank, -2147483647) DESC, created_at DESC, id DESC",
+  };
 }
 
 /**
  * GET /api/licitaciones
- * Lista las licitaciones más recientes usando cursor pagination.
+ * Lista las licitaciones recientes usando cursor pagination.
  */
 router.get("/", async (req: Request, res: Response) => {
   try {
     const limit = readLimit(req);
     const windowDays = readWindowDays(req);
+    const sortMode = readSortMode(req);
     const cursor = decodeCursor(req.query.cursor);
 
     if (req.query.cursor && !cursor) {
@@ -168,11 +474,17 @@ router.get("/", async (req: Request, res: Response) => {
       return;
     }
 
+    if (cursor && cursor.mode !== sortMode) {
+      res.status(400).json({ error: "Cursor no coincide con el orden solicitado" });
+      return;
+    }
+
     const filters = readFilters(req);
     const windowStart = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
     const startedAt = Date.now();
 
-    const { whereClause, params, paramIndex } = buildWhereClause(
+    const { whereClause, params, paramIndex, orderBy } = buildQueryParts(
+      sortMode,
       filters,
       windowStart,
       cursor
@@ -183,23 +495,27 @@ router.get("/", async (req: Request, res: Response) => {
     const rows = await query<LicitacionRow>(
       `SELECT id, codigo_externo, nombre, organismo_nombre, tipo,
               monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
-              estado, url, region, categoria, created_at
+              estado, url, region, categoria, source_rank, created_at
        FROM licitaciones
        ${whereClause}
-       ORDER BY created_at DESC, id DESC
+       ${orderBy}
        LIMIT $${paramIndex}`,
       params
     );
 
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
-    const nextCursor = hasMore ? encodeCursor(pageRows[pageRows.length - 1]!) : null;
+    const nextCursor =
+      hasMore && pageRows.length > 0
+        ? encodeCursor(pageRows[pageRows.length - 1]!, sortMode)
+        : null;
 
     apiLogger.info("licitaciones_feed_request", {
       limit,
       hasMore,
       returnedRows: pageRows.length,
       windowDays,
+      sortMode,
       durationMs: Date.now() - startedAt,
     });
 
@@ -209,6 +525,7 @@ router.get("/", async (req: Request, res: Response) => {
         limit,
         hasMore,
         nextCursor,
+        sortMode,
         windowDays,
         windowStart: windowStart.toISOString(),
       },
@@ -232,7 +549,7 @@ router.get("/regions", async (req: Request, res: Response) => {
     const rows = await query<{ region: string }>(
       `SELECT DISTINCT region
        FROM licitaciones
-       WHERE created_at >= $1
+       WHERE COALESCE(fecha_publicacion, created_at) >= $1
          AND region IS NOT NULL
          AND TRIM(region) <> ''
        ORDER BY region ASC`,
@@ -262,7 +579,7 @@ router.get("/:id", async (req: Request, res: Response) => {
     const row = await queryOne<LicitacionRow>(
       `SELECT id, codigo_externo, nombre, organismo_nombre, tipo,
               monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
-              estado, url, region, categoria, created_at
+              estado, url, region, categoria, source_rank, created_at
        FROM licitaciones
        WHERE id = $1 OR codigo_externo = $1
        ORDER BY created_at DESC, id DESC

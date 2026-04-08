@@ -101,6 +101,7 @@ BEGIN
         region TEXT,
         categoria TEXT NOT NULL DEFAULT 'General',
         rubro_code TEXT,
+        source_rank INTEGER,
         notificada BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -134,6 +135,7 @@ BEGIN
         region TEXT,
         categoria TEXT NOT NULL DEFAULT 'General',
         rubro_code TEXT,
+        source_rank INTEGER,
         notificada BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -141,6 +143,9 @@ BEGIN
     $ddl$;
   END IF;
 END $$;
+
+ALTER TABLE public.licitaciones
+  ADD COLUMN IF NOT EXISTS source_rank INTEGER;
 
 CREATE TABLE IF NOT EXISTS public.licitaciones_default
   PARTITION OF public.licitaciones DEFAULT;
@@ -188,6 +193,9 @@ CREATE INDEX IF NOT EXISTS idx_licitaciones_monto_estimado_created_at_desc
   ON licitaciones (monto_estimado, created_at DESC, id DESC)
   WHERE monto_estimado IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_licitaciones_fecha_publicacion_source_rank
+  ON licitaciones (fecha_publicacion DESC, source_rank ASC, created_at DESC, id DESC);
+
 CREATE INDEX IF NOT EXISTS idx_licitaciones_notificada_false
   ON licitaciones (notificada)
   WHERE notificada = FALSE;
@@ -208,10 +216,14 @@ CREATE TABLE IF NOT EXISTS archive.licitaciones (
   region TEXT,
   categoria TEXT NOT NULL DEFAULT 'General',
   rubro_code TEXT,
+  source_rank INTEGER,
   notificada BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE archive.licitaciones
+  ADD COLUMN IF NOT EXISTS source_rank INTEGER;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_licitaciones_codigo_externo
   ON archive.licitaciones (codigo_externo);
@@ -234,13 +246,13 @@ BEGIN
   INSERT INTO archive.licitaciones (
     id, codigo_externo, nombre, organismo_nombre, tipo,
     monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
-    estado, url, region, categoria, rubro_code, notificada,
+    estado, url, region, categoria, rubro_code, source_rank, notificada,
     created_at, updated_at
   )
   SELECT
     id, codigo_externo, nombre, organismo_nombre, tipo,
     monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
-    estado, url, region, categoria, rubro_code, notificada,
+    estado, url, region, categoria, rubro_code, source_rank, notificada,
     created_at, updated_at
   FROM moved
   ON CONFLICT (codigo_externo) DO UPDATE SET
@@ -362,24 +374,41 @@ ORDER BY codigo_externo, created_at DESC, updated_at DESC, id DESC
 ON CONFLICT (codigo_externo) DO UPDATE SET updated_at = EXCLUDED.updated_at;
 
 DO $$
+DECLARE
+  has_rubro_code boolean := FALSE;
 BEGIN
   IF to_regclass('public.licitaciones_legacy_unpartitioned') IS NOT NULL THEN
-    EXECUTE $migrate$
-      INSERT INTO licitaciones (
-        id, codigo_externo, nombre, organismo_nombre, tipo,
-        monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
-        estado, url, region, categoria, rubro_code, notificada, created_at, updated_at
-      )
-      SELECT
-        legacy.id, legacy.codigo_externo, legacy.nombre, legacy.organismo_nombre, legacy.tipo,
-        legacy.monto_estimado, legacy.monto_label, legacy.moneda, legacy.fecha_publicacion, legacy.fecha_cierre,
-        legacy.estado, legacy.url, legacy.region, legacy.categoria, legacy.rubro_code,
-        legacy.notificada, legacy.created_at, COALESCE(legacy.updated_at, NOW())
-      FROM licitaciones_legacy_unpartitioned legacy
-      WHERE NOT EXISTS (
-        SELECT 1 FROM licitaciones current WHERE current.codigo_externo = legacy.codigo_externo
-      )
-    $migrate$;
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'licitaciones_legacy_unpartitioned'
+        AND column_name = 'rubro_code'
+    )
+    INTO has_rubro_code;
+
+    EXECUTE format(
+      $migrate$
+        INSERT INTO licitaciones (
+          id, codigo_externo, nombre, organismo_nombre, tipo,
+          monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
+          estado, url, region, categoria, rubro_code, source_rank, notificada, created_at, updated_at
+        )
+        SELECT
+          legacy.id, legacy.codigo_externo, legacy.nombre, legacy.organismo_nombre, legacy.tipo,
+          legacy.monto_estimado, legacy.monto_label, legacy.moneda, legacy.fecha_publicacion, legacy.fecha_cierre,
+          legacy.estado, legacy.url, legacy.region, legacy.categoria, %s,
+          NULL::integer, legacy.notificada, legacy.created_at, COALESCE(legacy.updated_at, NOW())
+        FROM licitaciones_legacy_unpartitioned legacy
+        WHERE NOT EXISTS (
+          SELECT 1 FROM licitaciones current WHERE current.codigo_externo = legacy.codigo_externo
+        )
+      $migrate$,
+      CASE
+        WHEN has_rubro_code THEN 'legacy.rubro_code'
+        ELSE 'NULL::text'
+      END
+    );
   END IF;
 END $$;
 

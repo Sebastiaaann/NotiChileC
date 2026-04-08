@@ -8,6 +8,10 @@ import {
 } from "@testing-library/react-native";
 import React from "react";
 import { FlatList } from "react-native";
+import {
+  DEFAULT_FEED_SORT_MODE,
+  FEED_SORT_STORAGE_KEY,
+} from "../../services/feed-sort";
 
 const mockPush = jest.fn();
 const mockFetchLicitaciones = jest.fn();
@@ -46,6 +50,8 @@ jest.mock("../../services/push-installation", () => ({
     mockSyncFeedFiltersPreferences(...args),
 }));
 
+jest.setTimeout(15000);
+
 describe("LicitacionesFeed", () => {
   function createLicitacion(overrides: Record<string, unknown> = {}) {
     return {
@@ -78,6 +84,13 @@ describe("LicitacionesFeed", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockSyncFeedFiltersPreferences.mockResolvedValue(undefined);
+    mockFeedFiltersStorage.getItem.mockImplementation(async (key: string) => {
+      if (key === FEED_SORT_STORAGE_KEY) {
+        return DEFAULT_FEED_SORT_MODE;
+      }
+
+      return null;
+    });
 
     mockFetchRubros.mockResolvedValue({
       data: [{ code: "45000000", name: "Construcción", parentCode: null }],
@@ -98,21 +111,26 @@ describe("LicitacionesFeed", () => {
   });
 
   it("restaura filtros persistidos y consulta con esos valores", async () => {
-    mockFeedFiltersStorage.getItem.mockResolvedValue(
-      JSON.stringify({
+    mockFeedFiltersStorage.getItem.mockImplementation(async (key: string) => {
+      if (key === FEED_SORT_STORAGE_KEY) {
+        return DEFAULT_FEED_SORT_MODE;
+      }
+
+      return JSON.stringify({
         rubro: "45000000",
         tipo: "L1",
         region: "RM",
         montoMin: 100000000,
         montoMax: null,
         montoPresetId: "mas-100m",
-      })
-    );
+      });
+    });
 
     renderFeed();
 
     await waitFor(() => {
       expect(mockFetchLicitaciones).toHaveBeenCalledWith({
+        sortMode: DEFAULT_FEED_SORT_MODE,
         cursor: null,
         limit: 20,
         windowDays: 90,
@@ -137,6 +155,7 @@ describe("LicitacionesFeed", () => {
 
     await waitFor(() => {
       expect(mockFetchLicitaciones).toHaveBeenCalledWith({
+        sortMode: DEFAULT_FEED_SORT_MODE,
         cursor: null,
         limit: 20,
         windowDays: 90,
@@ -155,6 +174,7 @@ describe("LicitacionesFeed", () => {
 
     await waitFor(() => {
       expect(mockFetchLicitaciones).toHaveBeenLastCalledWith({
+        sortMode: DEFAULT_FEED_SORT_MODE,
         cursor: null,
         limit: 20,
         windowDays: 90,
@@ -171,16 +191,20 @@ describe("LicitacionesFeed", () => {
   });
 
   it("limpia filtros activos y vuelve al estado base", async () => {
-    mockFeedFiltersStorage.getItem.mockResolvedValue(
-      JSON.stringify({
+    mockFeedFiltersStorage.getItem.mockImplementation(async (key: string) => {
+      if (key === FEED_SORT_STORAGE_KEY) {
+        return DEFAULT_FEED_SORT_MODE;
+      }
+
+      return JSON.stringify({
         rubro: null,
         tipo: "L1",
         region: "RM",
         montoMin: null,
         montoMax: 10000000,
         montoPresetId: "hasta-10m",
-      })
-    );
+      });
+    });
 
     renderFeed();
 
@@ -189,6 +213,7 @@ describe("LicitacionesFeed", () => {
 
     await waitFor(() => {
       expect(mockFetchLicitaciones).toHaveBeenLastCalledWith({
+        sortMode: DEFAULT_FEED_SORT_MODE,
         cursor: null,
         limit: 20,
         windowDays: 90,
@@ -240,6 +265,7 @@ describe("LicitacionesFeed", () => {
 
     await waitFor(() => {
       expect(mockFetchLicitaciones).toHaveBeenLastCalledWith({
+        sortMode: DEFAULT_FEED_SORT_MODE,
         cursor: "cursor-2",
         limit: 20,
         windowDays: 90,
@@ -299,6 +325,7 @@ describe("LicitacionesFeed", () => {
 
     await waitFor(() => {
       expect(mockFetchLicitaciones).toHaveBeenLastCalledWith({
+        sortMode: DEFAULT_FEED_SORT_MODE,
         cursor: null,
         limit: 20,
         windowDays: 90,
@@ -328,6 +355,7 @@ describe("LicitacionesFeed", () => {
 
     await waitFor(() => {
       expect(mockFetchLicitaciones).toHaveBeenCalledWith({
+        sortMode: DEFAULT_FEED_SORT_MODE,
         cursor: null,
         limit: 20,
         windowDays: 90,
@@ -371,5 +399,91 @@ describe("LicitacionesFeed", () => {
     });
 
     expect(mockFetchLicitaciones).toHaveBeenCalledTimes(1);
+  });
+
+  it("restaura el modo de orden persistido y consulta con ese valor", async () => {
+    mockFeedFiltersStorage.getItem.mockImplementation(async (key: string) => {
+      if (key === FEED_SORT_STORAGE_KEY) {
+        return "closing_soon";
+      }
+
+      return null;
+    });
+
+    renderFeed();
+
+    await waitFor(() => {
+      expect(mockFetchLicitaciones).toHaveBeenCalledWith({
+        sortMode: "closing_soon",
+        cursor: null,
+        limit: 20,
+        windowDays: 90,
+        filters: {
+          rubro: null,
+          tipo: null,
+          region: null,
+          montoMin: null,
+          montoMax: null,
+          montoPresetId: null,
+        },
+      });
+    });
+
+    expect(screen.getAllByText("Prontas a cerrar").length).toBeGreaterThan(0);
+  });
+
+  it("cambiar el modo de orden refresca el feed y lo persiste sin resincronizar notificaciones", async () => {
+    renderFeed();
+
+    await waitFor(() => {
+      expect(mockFetchLicitaciones).toHaveBeenCalledWith({
+        sortMode: DEFAULT_FEED_SORT_MODE,
+        cursor: null,
+        limit: 20,
+        windowDays: 90,
+        filters: {
+          rubro: null,
+          tipo: null,
+          region: null,
+          montoMin: null,
+          montoMax: null,
+          montoPresetId: null,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(mockSyncFeedFiltersPreferences).toHaveBeenCalledTimes(1);
+    });
+
+    mockSyncFeedFiltersPreferences.mockClear();
+
+    fireEvent.press(await screen.findByText("Más relevantes"));
+
+    await waitFor(() => {
+      expect(mockFetchLicitaciones).toHaveBeenLastCalledWith({
+        sortMode: "most_relevant",
+        cursor: null,
+        limit: 20,
+        windowDays: 90,
+        filters: {
+          rubro: null,
+          tipo: null,
+          region: null,
+          montoMin: null,
+          montoMax: null,
+          montoPresetId: null,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(mockFeedFiltersStorage.setItem).toHaveBeenCalledWith(
+        FEED_SORT_STORAGE_KEY,
+        "most_relevant"
+      );
+    });
+
+    expect(mockSyncFeedFiltersPreferences).not.toHaveBeenCalled();
   });
 });

@@ -28,6 +28,14 @@ import {
   sanitizeFeedFilters,
   type FeedFilters,
 } from "../../src/services/feed-filters";
+import {
+  DEFAULT_FEED_SORT_MODE,
+  FEED_SORT_LABELS,
+  FEED_SORT_MODES,
+  FEED_SORT_STORAGE_KEY,
+  sanitizeFeedSortMode,
+  type FeedSortMode,
+} from "../../src/services/feed-sort";
 import { isDemoApp } from "../../src/services/app-env";
 import { feedFiltersStorage } from "../../src/services/feed-filters-storage";
 import { syncFeedFiltersPreferences } from "../../src/services/push-installation";
@@ -77,6 +85,7 @@ export default function LicitacionesFeed() {
   const [rubros, setRubros] = useState<Rubro[]>([]);
   const [regions, setRegions] = useState<RegionOption[]>([]);
   const [filters, setFilters] = useState<FeedFilters>(DEFAULT_FEED_FILTERS);
+  const [sortMode, setSortMode] = useState<FeedSortMode>(DEFAULT_FEED_SORT_MODE);
   const [hydrated, setHydrated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -92,7 +101,7 @@ export default function LicitacionesFeed() {
 
     async function initializeFeed() {
       try {
-        const [rubrosResponse, regionsResponse, storedFilters] =
+        const [rubrosResponse, regionsResponse, storedFilters, storedSortMode] =
           await Promise.all([
             fetchRubros().catch((err) => {
               if (!demoApp) {
@@ -107,6 +116,7 @@ export default function LicitacionesFeed() {
               return { data: [] as RegionOption[] };
             }),
             feedFiltersStorage.getItem(FEED_FILTERS_STORAGE_KEY),
+            feedFiltersStorage.getItem(FEED_SORT_STORAGE_KEY),
           ]);
 
         if (cancelled) return;
@@ -117,6 +127,10 @@ export default function LicitacionesFeed() {
         if (storedFilters) {
           const parsed = JSON.parse(storedFilters) as unknown;
           setFilters(sanitizeFeedFilters(parsed));
+        }
+
+        if (storedSortMode) {
+          setSortMode(sanitizeFeedSortMode(storedSortMode));
         }
       } catch (err) {
         if (!demoApp) {
@@ -145,6 +159,14 @@ export default function LicitacionesFeed() {
     ).catch((err) => console.error("[feed] Error persistiendo filtros:", err));
   }, [filters, hydrated]);
 
+  useEffect(() => {
+    if (!hydrated) return;
+
+    void feedFiltersStorage.setItem(FEED_SORT_STORAGE_KEY, sortMode).catch((err) =>
+      console.error("[feed] Error persistiendo orden:", err)
+    );
+  }, [hydrated, sortMode]);
+
   const loadLicitaciones = useCallback(
     async (
       options: {
@@ -172,6 +194,7 @@ export default function LicitacionesFeed() {
           limit: 20,
           windowDays: HOT_WINDOW_DAYS,
           filters,
+          sortMode,
         });
 
         if (requestSequence !== requestSequenceRef.current) {
@@ -207,7 +230,7 @@ export default function LicitacionesFeed() {
         }
       }
     },
-    [filters, hydrated, loadingMore]
+    [filters, hydrated, loadingMore, sortMode]
   );
 
   useEffect(() => {
@@ -244,6 +267,10 @@ export default function LicitacionesFeed() {
 
   const clearFilters = useCallback(() => {
     setFilters(DEFAULT_FEED_FILTERS);
+  }, []);
+
+  const updateSortMode = useCallback((nextSortMode: FeedSortMode) => {
+    setSortMode(nextSortMode);
   }, []);
 
   // ── Card ────────────────────────────────────────
@@ -364,7 +391,9 @@ export default function LicitacionesFeed() {
           {activeFilters ? (
             <Text style={styles.filtersSubtitle}>Filtros activos</Text>
           ) : (
-            <Text style={styles.filtersSubtitle}>Mostrando todas las licitaciones</Text>
+            <Text style={styles.filtersSubtitle}>
+              Mostrando {FEED_SORT_LABELS[sortMode].toLowerCase()}
+            </Text>
           )}
         </View>
         {activeFilters ? (
@@ -377,6 +406,36 @@ export default function LicitacionesFeed() {
           </TouchableOpacity>
         ) : null}
       </View>
+
+      <View style={styles.sortHeader}>
+        <Text style={styles.sortLabel}>Ordenar por</Text>
+        <Text style={styles.sortValue}>{FEED_SORT_LABELS[sortMode]}</Text>
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterScroll}
+        contentContainerStyle={styles.filterScrollContent}
+      >
+        {FEED_SORT_MODES.map((mode) => (
+          <TouchableOpacity
+            key={mode}
+            accessibilityRole="button"
+            style={[styles.chip, sortMode === mode && styles.chipActive]}
+            onPress={() => updateSortMode(mode)}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                sortMode === mode && styles.chipTextActive,
+              ]}
+            >
+              {FEED_SORT_LABELS[mode]}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
 
       <ScrollView
         horizontal
@@ -650,6 +709,22 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: 12,
     color: colors.textSecondary,
+  },
+  sortHeader: {
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  sortLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textSecondary,
+  },
+  sortValue: {
+    fontSize: 12,
+    color: colors.textMuted,
   },
   clearButton: {
     paddingHorizontal: 12,

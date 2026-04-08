@@ -11,6 +11,13 @@ import {
   type DemoLicitacion,
 } from "./demo-data";
 import type { FeedFilters } from "./feed-filters";
+import {
+  compareLicitacionesBySortMode,
+  DEFAULT_FEED_SORT_MODE,
+  isFeedSortMode,
+  sanitizeFeedSortMode,
+  type FeedSortMode,
+} from "./feed-sort";
 import type {
   InstallationPreferencesPayload,
   InstallationSyncPayload,
@@ -64,6 +71,7 @@ export interface CursorPageInfo {
   limit: number;
   hasMore: boolean;
   nextCursor: string | null;
+  sortMode?: FeedSortMode;
   windowDays: number;
   windowStart: string;
 }
@@ -74,6 +82,10 @@ export interface CursorPaginatedResponse {
 }
 
 type DemoCursor = {
+  sortMode: FeedSortMode;
+  primaryValue: string | number;
+  secondaryValue?: string | number;
+  tertiaryValue?: string | number;
   createdAt: string;
   id: string;
 };
@@ -117,13 +129,30 @@ function parseDemoCursor(value: string | null | undefined): DemoCursor | null {
   try {
     const parsed = JSON.parse(decodeURIComponent(value)) as Partial<DemoCursor>;
     if (
+      !parsed ||
       typeof parsed.createdAt !== "string" ||
-      typeof parsed.id !== "string"
+      typeof parsed.id !== "string" ||
+      !isFeedSortMode(parsed.sortMode)
     ) {
       return null;
     }
 
     return {
+      sortMode: sanitizeFeedSortMode(parsed.sortMode),
+      primaryValue:
+        typeof parsed.primaryValue === "number" || typeof parsed.primaryValue === "string"
+          ? parsed.primaryValue
+          : "",
+      secondaryValue:
+        typeof parsed.secondaryValue === "number" ||
+        typeof parsed.secondaryValue === "string"
+          ? parsed.secondaryValue
+          : undefined,
+      tertiaryValue:
+        typeof parsed.tertiaryValue === "number" ||
+        typeof parsed.tertiaryValue === "string"
+          ? parsed.tertiaryValue
+          : undefined,
       createdAt: parsed.createdAt,
       id: parsed.id,
     };
@@ -132,26 +161,32 @@ function parseDemoCursor(value: string | null | undefined): DemoCursor | null {
   }
 }
 
-function compareDemoCursor(item: Pick<Licitacion, "createdAt" | "id">, cursor: DemoCursor) {
-  const createdAtDiff =
-    new Date(item.createdAt).getTime() - new Date(cursor.createdAt).getTime();
-
-  if (createdAtDiff !== 0) {
-    return createdAtDiff;
-  }
-
-  return item.id.localeCompare(cursor.id);
+function compareDemoCursor(
+  item: Licitacion,
+  cursorItem: Licitacion,
+  sortMode: FeedSortMode
+) {
+  return compareLicitacionesBySortMode(item, cursorItem, sortMode);
 }
 
 function paginateDemoLicitaciones(
   items: Licitacion[],
   limit: number,
   cursor: string | null | undefined,
-  windowDays: number
+  windowDays: number,
+  sortMode: FeedSortMode
 ): CursorPaginatedResponse {
   const decodedCursor = parseDemoCursor(cursor);
+  const cursorItem = decodedCursor
+    ? items.find((item) => item.id === decodedCursor.id) ?? null
+    : null;
   const filtered = decodedCursor
-    ? items.filter((item) => compareDemoCursor(item, decodedCursor) < 0)
+    ? items.filter(
+        (item) =>
+          decodedCursor.sortMode === sortMode &&
+          cursorItem !== null &&
+          compareDemoCursor(item, cursorItem, sortMode) > 0
+      )
     : items;
 
   const pageRows = filtered.slice(0, limit);
@@ -159,6 +194,10 @@ function paginateDemoLicitaciones(
   const nextCursor =
     hasMore && pageRows.length > 0
       ? serializeDemoCursor({
+          sortMode,
+          primaryValue:
+            pageRows[pageRows.length - 1]!.fechaPublicacion ??
+            pageRows[pageRows.length - 1]!.createdAt,
           createdAt: pageRows[pageRows.length - 1]!.createdAt,
           id: pageRows[pageRows.length - 1]!.id,
         })
@@ -305,17 +344,20 @@ export async function fetchLicitaciones(
     limit?: number;
     windowDays?: number;
     filters?: Partial<FeedFilters>;
+    sortMode?: FeedSortMode;
   } = {}
 ): Promise<CursorPaginatedResponse> {
   const limit = options.limit ?? 20;
   const windowDays = options.windowDays ?? 90;
+  const sortMode = options.sortMode ?? DEFAULT_FEED_SORT_MODE;
 
   if (demoModeForcesFallback()) {
     return paginateDemoLicitaciones(
-      getDemoLicitaciones(options.filters).map(mapDemoLicitacion),
+      getDemoLicitaciones(options.filters, sortMode).map(mapDemoLicitacion),
       limit,
       options.cursor,
-      windowDays
+      windowDays,
+      sortMode
     );
   }
 
@@ -327,6 +369,7 @@ export async function fetchLicitaciones(
   if (options.cursor) {
     params.append("cursor", options.cursor);
   }
+  params.append("sortMode", sortMode);
 
   if (options.filters?.rubro) params.append("rubro", options.filters.rubro);
   if (options.filters?.tipo) params.append("tipo", options.filters.tipo);
@@ -349,10 +392,11 @@ export async function fetchLicitaciones(
       fetchApi<CursorPaginatedResponse>(`/api/licitaciones?${params.toString()}`),
     () =>
       paginateDemoLicitaciones(
-        getDemoLicitaciones(options.filters).map(mapDemoLicitacion),
+        getDemoLicitaciones(options.filters, sortMode).map(mapDemoLicitacion),
         limit,
         options.cursor,
-        windowDays
+        windowDays,
+        sortMode
       ),
     (response) => response.data.length === 0
   );

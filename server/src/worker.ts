@@ -191,7 +191,13 @@ function mergePreferDetailedRecord(
     incoming.rubro_code,
   ].filter(Boolean).length;
 
-  return incomingScore >= currentScore ? incoming : current;
+  const preferred = incomingScore >= currentScore ? incoming : current;
+  const fallback = preferred === incoming ? current : incoming;
+
+  return {
+    ...preferred,
+    source_rank: preferred.source_rank ?? fallback.source_rank ?? null,
+  };
 }
 
 function upsertPendingRecord(
@@ -342,6 +348,24 @@ async function loadExistingCodigos(
   );
 
   return new Set(rows.map((row) => row.codigo_externo));
+}
+
+async function syncScraperRanks(
+  deps: WorkerDependencies,
+  items: Array<{ codigoExterno: string }>,
+  nowIso: string
+): Promise<void> {
+  for (const [index, item] of items.entries()) {
+    await deps.query(
+      `UPDATE licitaciones
+       SET source_rank = $2,
+           updated_at = NOW()
+       WHERE codigo_externo = $1
+         AND fecha_publicacion >= $3::timestamptz
+         AND (source_rank IS DISTINCT FROM $2)`,
+      [item.codigoExterno, index + 1, nowIso]
+    );
+  }
 }
 
 async function loadCandidateInstallations(
@@ -755,15 +779,22 @@ export function createRunIngestCycle(
     try {
       const scrapeResult = await scrapeLicitaciones(20);
       result.found = scrapeResult.items.length;
+      const rankWindowStart = new Date(deps.now());
+      rankWindowStart.setDate(rankWindowStart.getDate() - 2);
 
       const existingSet = await loadExistingCodigos(
         deps,
         scrapeResult.items.map((item) => item.codigoExterno)
       );
 
-      for (const item of scrapeResult.items) {
+      await syncScraperRanks(deps, scrapeResult.items, rankWindowStart.toISOString());
+
+      for (const [index, item] of scrapeResult.items.entries()) {
         if (!existingSet.has(item.codigoExterno)) {
-          upsertPendingRecord(pendingRecords, scrapedToRecord(item));
+          upsertPendingRecord(pendingRecords, {
+            ...scrapedToRecord(item),
+            source_rank: index + 1,
+          });
         }
       }
     } catch (error) {
@@ -843,9 +874,10 @@ export function createRunIngestCycle(
              region = $12,
              categoria = $13,
              rubro_code = $14,
+             source_rank = COALESCE($15, source_rank),
              updated_at = NOW()
            WHERE codigo_externo = $1
-             AND (organismo_nombre IS NULL OR tipo IS NULL OR monto_estimado IS NULL)`,
+              AND (organismo_nombre IS NULL OR tipo IS NULL OR monto_estimado IS NULL)`,
           [
             record.codigo_externo,
             record.nombre,
@@ -861,6 +893,7 @@ export function createRunIngestCycle(
             record.region,
             record.categoria,
             record.rubro_code,
+            record.source_rank,
           ]
         );
         await deps.sleep(DETAIL_DELAY_MS);
@@ -889,7 +922,7 @@ export function createRunIngestCycle(
               created_at,
               updated_at
             )
-            VALUES ($2, $1, $16::timestamptz, NOW())
+            VALUES ($2, $1, $17::timestamptz, NOW())
             ON CONFLICT (codigo_externo) DO NOTHING
             RETURNING codigo_externo
           )
@@ -909,6 +942,7 @@ export function createRunIngestCycle(
             region,
             categoria,
             rubro_code,
+            source_rank,
             notificada,
             created_at,
             updated_at
@@ -916,9 +950,9 @@ export function createRunIngestCycle(
           SELECT
             $1, $2, $3, $4, $5,
             $6, $7, $8, $9::timestamptz, $10::timestamptz,
-            $11, $12, $13, $14, $15,
+            $11, $12, $13, $14, $15, $16,
             FALSE,
-            $16::timestamptz,
+            $17::timestamptz,
             NOW()
           WHERE EXISTS (SELECT 1 FROM claimed)
         `,
@@ -938,6 +972,7 @@ export function createRunIngestCycle(
           record.region,
           record.categoria,
           record.rubro_code,
+          record.source_rank,
           createdAt,
         ]
       );

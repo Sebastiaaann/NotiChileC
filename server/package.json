@@ -21,7 +21,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test-push": "tsx scripts/test-push.ts",
-    "db:init": "psql $DATABASE_URL -f bootstrap.sql"
+    "db:init": "psql $DATABASE_URL -f bootstrap.sql",
+    "db:bootstrap": "node -e \"require('dotenv').config(); const {spawnSync}=require('node:child_process'); const psql='C:/Program Files/PostgreSQL/17/bin/psql.exe'; const conn=process.env.DATABASE_URL; if(!conn){console.error('DATABASE_URL is required'); process.exit(1);} for(const file of ['bootstrap.sql','migrations/add_rubro_filters.sql']){const result=spawnSync(psql,[conn,'-v','ON_ERROR_STOP=1','-f',file],{stdio:'inherit'}); if(result.status!==0){process.exit(result.status||1);}}\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1022.0",
