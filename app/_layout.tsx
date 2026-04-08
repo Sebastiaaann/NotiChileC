@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Stack, useRouter } from "expo-router";
 import * as Notifications from "expo-notifications";
+import { startExpoGoAlerts } from "../src/services/expo-go-alerts";
 import { setupNotificationHandler } from "../src/services/push";
 import { bootstrapPushInstallation } from "../src/services/push-installation";
 import { isDemoApp } from "../src/services/app-env";
@@ -15,6 +16,8 @@ export default function RootLayout() {
     useRef<Notifications.EventSubscription | null>(null);
 
   useEffect(() => {
+    startExpoGoAlerts();
+
     void bootstrapPushInstallation().catch((error) => {
       if (!demoApp) {
         console.warn("[push] Error inicializando push:", error);

@@ -37,6 +37,7 @@ import {
   type FeedSortMode,
 } from "../../src/services/feed-sort";
 import { isDemoApp } from "../../src/services/app-env";
+import { subscribeToExpoGoAlertRefresh } from "../../src/services/expo-go-alerts";
 import { feedFiltersStorage } from "../../src/services/feed-filters-storage";
 import { syncFeedFiltersPreferences } from "../../src/services/push-installation";
 
@@ -237,6 +238,14 @@ export default function LicitacionesFeed() {
     if (!hydrated) return;
     loadLicitaciones();
   }, [loadLicitaciones, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    return subscribeToExpoGoAlertRefresh(() => {
+      void loadLicitaciones({ cursor: null, append: false, isRefresh: false });
+    });
+  }, [hydrated, loadLicitaciones]);
 
   useEffect(() => {
     if (!hydrated) return;
