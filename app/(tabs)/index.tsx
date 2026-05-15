@@ -40,6 +40,7 @@ import { isDemoApp } from "../../src/services/app-env";
 import { subscribeToExpoGoAlertRefresh } from "../../src/services/expo-go-alerts";
 import { feedFiltersStorage } from "../../src/services/feed-filters-storage";
 import { syncFeedFiltersPreferences } from "../../src/services/push-installation";
+import { typography } from "../../src/theme/typography";
 
 // ── Helpers ─────────────────────────────────────────
 
@@ -671,6 +672,11 @@ export default function LicitacionesFeed() {
                   ? "Estamos preparando licitaciones representativas para mostrarte."
                   : "Aún no hay licitaciones. El worker está buscando..."}
             </Text>
+            <Text style={styles.emptyAccent}>
+              {activeFilters
+                ? "Probá abrir un poco el rango para encontrar oportunidades."
+                : "Cuando aparezcan, las primeras van a destacar de verdad."}
+            </Text>
             {activeFilters ? (
               <TouchableOpacity
                 style={styles.retryButton}
@@ -710,13 +716,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   filtersTitle: {
-    fontSize: 15,
-    fontWeight: "700",
+    ...typography.cardTitle,
     color: colors.textPrimary,
   },
   filtersSubtitle: {
     marginTop: 2,
-    fontSize: 12,
+    ...typography.cardMeta,
     color: colors.textSecondary,
   },
   sortHeader: {
@@ -727,12 +732,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   sortLabel: {
-    fontSize: 13,
-    fontWeight: "600",
+    ...typography.sectionLabel,
     color: colors.textSecondary,
+    textTransform: "uppercase",
   },
   sortValue: {
-    fontSize: 12,
+    ...typography.cardMeta,
     color: colors.textMuted,
   },
   clearButton: {
@@ -743,8 +748,7 @@ const styles = StyleSheet.create({
   },
   clearButtonText: {
     color: colors.primary,
-    fontWeight: "600",
-    fontSize: 12,
+    ...typography.buttonLabel,
   },
   filterScrollContent: {
     paddingHorizontal: 16,
@@ -763,13 +767,12 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   chipText: {
-    fontSize: 13,
+    ...typography.body,
     color: colors.textSecondary,
-    fontWeight: "500",
   },
   chipTextActive: {
     color: colors.primary,
-    fontWeight: "600",
+    fontFamily: typography.bodyStrong.fontFamily,
   },
   list: {
     padding: 16,
@@ -812,8 +815,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   codeBadgeText: {
-    fontSize: 12,
-    fontWeight: "600",
+    ...typography.cardCode,
     color: colors.primary,
   },
   timeRow: {
@@ -822,16 +824,14 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   timeText: {
-    fontSize: 11,
+    ...typography.meta,
     color: colors.textMuted,
   },
 
   // Title
   title: {
-    fontSize: 15,
-    fontWeight: "600",
+    ...typography.cardTitle,
     color: colors.textPrimary,
-    lineHeight: 21,
     marginBottom: 6,
   },
   titleCerrada: {
@@ -846,7 +846,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   entityText: {
-    fontSize: 13,
+    ...typography.cardSubtitle,
     color: colors.textSecondary,
     flex: 1,
   },
@@ -866,12 +866,11 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   monto: {
-    fontSize: 16,
-    fontWeight: "700",
+    ...typography.detailMetric,
     color: colors.textPrimary,
   },
   montoEmpty: {
-    fontSize: 13,
+    ...typography.cardSubtitle,
     color: colors.textMuted,
   },
   cerradaBadge: {
@@ -881,25 +880,24 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   cerradaBadgeText: {
-    fontSize: 10,
-    fontWeight: "700",
+    ...typography.tabLabel,
+    fontFamily: typography.bodyStrong.fontFamily,
     color: colors.error,
   },
 
   // States
   loadingText: {
     marginTop: 12,
-    fontSize: 14,
+    ...typography.body,
     color: colors.textSecondary,
   },
   errorTitle: {
-    fontSize: 16,
-    fontWeight: "600",
+    ...typography.cardTitle,
     color: colors.textPrimary,
     marginTop: 12,
   },
   errorText: {
-    fontSize: 13,
+    ...typography.cardSubtitle,
     color: colors.textSecondary,
     textAlign: "center",
     marginTop: 4,
@@ -913,13 +911,19 @@ const styles = StyleSheet.create({
   },
   retryText: {
     color: colors.textOnPrimary,
-    fontWeight: "600",
+    ...typography.buttonLabel,
   },
   emptyText: {
-    fontSize: 14,
+    ...typography.body,
     color: colors.textMuted,
     textAlign: "center",
     marginTop: 12,
+  },
+  emptyAccent: {
+    ...typography.emptyStateAccent,
+    color: colors.textSecondary,
+    textAlign: "center",
+    marginTop: 8,
   },
   footer: {
     paddingVertical: 16,
@@ -927,7 +931,7 @@ const styles = StyleSheet.create({
   endText: {
     textAlign: "center",
     color: colors.textMuted,
-    fontSize: 13,
+    ...typography.cardMeta,
     paddingVertical: 16,
   },
 });

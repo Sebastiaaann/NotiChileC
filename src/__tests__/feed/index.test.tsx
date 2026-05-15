@@ -50,6 +50,10 @@ jest.mock("../../services/push-installation", () => ({
     mockSyncFeedFiltersPreferences(...args),
 }));
 
+jest.mock("../../services/expo-go-alerts", () => ({
+  subscribeToExpoGoAlertRefresh: () => () => undefined,
+}));
+
 jest.setTimeout(15000);
 
 describe("LicitacionesFeed", () => {

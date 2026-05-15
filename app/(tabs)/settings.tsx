@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../src/theme/colors";
+import { typography } from "../../src/theme/typography";
 import {
   bootstrapPushInstallation,
   getCachedPushInstallationSnapshot,
@@ -327,22 +328,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   deviceTitle: {
-    fontSize: 16,
-    fontWeight: "600",
+    ...typography.cardTitle,
     color: colors.textPrimary,
   },
   deviceSub: {
-    fontSize: 13,
+    ...typography.cardMeta,
     color: colors.textSecondary,
     marginTop: 2,
   },
 
   // Section label
   sectionLabel: {
-    fontSize: 12,
-    fontWeight: "600",
+    ...typography.sectionLabel,
     color: colors.textSecondary,
-    letterSpacing: 0.5,
+    textTransform: "uppercase",
     marginBottom: 12,
     marginLeft: 4,
   },
@@ -354,7 +353,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   loadingText: {
-    fontSize: 13,
+    ...typography.cardSubtitle,
     color: colors.textSecondary,
   },
 
@@ -371,15 +370,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   toggleTitle: {
-    fontSize: 15,
-    fontWeight: "500",
+    ...typography.cardTitle,
     color: colors.textPrimary,
   },
   toggleSub: {
-    fontSize: 12,
+    ...typography.cardMeta,
     color: colors.textSecondary,
     marginTop: 4,
-    lineHeight: 18,
   },
   actionButton: {
     paddingHorizontal: 14,
@@ -392,8 +389,7 @@ const styles = StyleSheet.create({
   },
   actionButtonText: {
     color: colors.primary,
-    fontSize: 12,
-    fontWeight: "600",
+    ...typography.buttonLabel,
   },
 
   statusBanner: {
@@ -412,8 +408,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(59, 130, 246, 0.06)",
   },
   statusText: {
-    fontSize: 12,
-    lineHeight: 18,
+    ...typography.cardMeta,
     flex: 1,
   },
   statusTextSuccess: {
@@ -426,7 +421,7 @@ const styles = StyleSheet.create({
     color: colors.primary,
   },
   statusBold: {
-    fontWeight: "700",
+    fontFamily: typography.bodyStrong.fontFamily,
   },
 
   tokenCard: {
@@ -435,14 +430,13 @@ const styles = StyleSheet.create({
     borderTopColor: colors.divider,
   },
   tokenLabel: {
-    fontSize: 12,
-    fontWeight: "600",
+    ...typography.sectionLabel,
     color: colors.textSecondary,
     marginBottom: 8,
+    textTransform: "uppercase",
   },
   tokenValue: {
-    fontSize: 11,
+    ...typography.settingsValueMono,
     color: colors.textPrimary,
-    fontFamily: "monospace",
   },
 });
