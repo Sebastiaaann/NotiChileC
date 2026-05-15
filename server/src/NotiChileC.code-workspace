@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "NotiChileC",
+			"path": "../.."
+		},
+		{
+			"name": ".agents",
+			"path": "../../../../chilecompra-alertas/frontend/.agents"
+		}
+	],
+	"settings": {}
+}

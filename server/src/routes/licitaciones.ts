@@ -8,6 +8,7 @@ import {
 } from "../feed-sort";
 import { apiLogger } from "../observability/logger";
 import { captureException } from "../observability/sentry";
+import { ensureRuntimeSchema } from "../runtime-schema";
 
 const router = Router();
 const DEFAULT_LIMIT = 20;
@@ -126,7 +127,7 @@ function decodeCursor(value: unknown): FeedCursor | null {
 
   try {
     const decoded = Buffer.from(value, "base64url").toString("utf8");
-    const parsed = JSON.parse(decoded) as Partial<FeedCursor>;
+    const parsed = JSON.parse(decoded) as Record<string, unknown>;
 
     if (!parsed || !isFeedSortMode(parsed.mode) || typeof parsed.id !== "string") {
       return null;
@@ -464,6 +465,8 @@ function buildQueryParts(
  */
 router.get("/", async (req: Request, res: Response) => {
   try {
+    await ensureRuntimeSchema();
+
     const limit = readLimit(req);
     const windowDays = readWindowDays(req);
     const sortMode = readSortMode(req);
@@ -576,6 +579,8 @@ router.get("/regions", async (req: Request, res: Response) => {
  */
 router.get("/:id", async (req: Request, res: Response) => {
   try {
+    await ensureRuntimeSchema();
+
     const row = await queryOne<LicitacionRow>(
       `SELECT id, codigo_externo, nombre, organismo_nombre, tipo,
               monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,

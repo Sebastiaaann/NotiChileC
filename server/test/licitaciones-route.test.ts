@@ -9,6 +9,10 @@ const { queryMock, queryOneMock, checkDatabaseReadyMock, getPoolStatsMock } = vi
   getPoolStatsMock: vi.fn(),
 }));
 
+const { ensureRuntimeSchemaMock } = vi.hoisted(() => ({
+  ensureRuntimeSchemaMock: vi.fn(),
+}));
+
 vi.mock("../src/db", () => ({
   query: queryMock,
   queryOne: queryOneMock,
@@ -16,11 +20,16 @@ vi.mock("../src/db", () => ({
   getPoolStats: getPoolStatsMock,
 }));
 
+vi.mock("../src/runtime-schema", () => ({
+  ensureRuntimeSchema: ensureRuntimeSchemaMock,
+}));
+
 import { createApp } from "../src/app";
 
 describe("GET /api/licitaciones", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    ensureRuntimeSchemaMock.mockResolvedValue(undefined);
     checkDatabaseReadyMock.mockResolvedValue({
       ok: true,
       durationMs: 5,

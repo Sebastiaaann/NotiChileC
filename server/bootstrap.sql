@@ -485,6 +485,17 @@ CREATE TABLE IF NOT EXISTS worker_runs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nombre TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
+
 ALTER TABLE worker_runs
   ADD COLUMN IF NOT EXISTS worker_name TEXT NOT NULL DEFAULT 'sync',
   ADD COLUMN IF NOT EXISTS notifications_retryable INTEGER NOT NULL DEFAULT 0,
