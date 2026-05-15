@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { query, queryOne } from "../db";
 import { apiLogger } from "../observability/logger";
+import { sendWelcomeEmail } from "../services/email";
 
 const JWT_SECRET = process.env.JWT_SECRET || "notichilec-dev-secret-change-in-prod";
 const SALT_ROUNDS = 10;
@@ -101,6 +102,14 @@ router.post("/register", async (req: Request, res: Response) => {
     setTokenCookie(res, token);
 
     apiLogger.info("user_registered", { user_id: user.id, email: user.email });
+
+    // Fire-and-forget: no bloqueamos la respuesta
+    sendWelcomeEmail(user.email, user.nombre).catch((err) =>
+      apiLogger.error("welcome_email_failed", {
+        user_id: user.id,
+        error: err instanceof Error ? err : new Error(String(err)),
+      }),
+    );
 
     res.status(201).json({
       user: sanitizeUser(user),
