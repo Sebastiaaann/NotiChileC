@@ -8,6 +8,7 @@ import { apiLogger } from "../observability/logger";
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || "NotiChileC <noreply@notichilec.com>";
+const BASE_URL = process.env.BASE_URL || "http://localhost:5173";
 
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 
@@ -25,22 +26,22 @@ function fillTemplate(template: string, vars: Record<string, string>): string {
   return result;
 }
 
-// ── Senders ─────────────────────────────────────────
-
-/**
- * Envía un email de bienvenida usando EmailMD + Resend.
- * Si RESEND_API_KEY no está configurada, solo loggea un warning.
- */
-export async function sendWelcomeEmail(to: string, nombre: string): Promise<void> {
+/** Render EmailMD template and send via Resend. Fire-and-forget pattern. */
+async function renderAndSend(
+  to: string,
+  subject: string,
+  templateName: string,
+  vars: Record<string, string>,
+): Promise<void> {
   if (!resend) {
-    apiLogger.warn("email_skipped_no_api_key", { to });
+    apiLogger.warn("email_skipped_no_api_key", { to, template: templateName });
     return;
   }
 
   try {
-    const templatePath = resolve(TEMPLATES_DIR, "welcome.md");
+    const templatePath = resolve(TEMPLATES_DIR, templateName);
     const raw = await readFile(templatePath, "utf-8");
-    const markdown = fillTemplate(raw, { nombre, email: to });
+    const markdown = fillTemplate(raw, vars);
 
     const { html, text } = await render(markdown, {
       theme: {
@@ -52,21 +53,66 @@ export async function sendWelcomeEmail(to: string, nombre: string): Promise<void
     const { error } = await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: "Bienvenido a NotiChileC",
+      subject,
       html,
       text,
     });
 
     if (error) {
-      apiLogger.error("email_send_error", { to, error: JSON.stringify(error) });
+      apiLogger.error("email_send_error", { to, template: templateName, error: JSON.stringify(error) });
       return;
     }
 
-    apiLogger.info("email_sent_welcome", { to });
+    apiLogger.info("email_sent", { to, template: templateName });
   } catch (err) {
     apiLogger.error("email_send_exception", {
       to,
+      template: templateName,
       error: err instanceof Error ? err : new Error(String(err)),
     });
   }
+}
+
+// ── Senders ─────────────────────────────────────────
+
+/**
+ * Envía un email de bienvenida usando EmailMD + Resend.
+ * Si RESEND_API_KEY no está configurada, solo loggea un warning.
+ */
+export async function sendWelcomeEmail(to: string, nombre: string): Promise<void> {
+  await renderAndSend(to, "Bienvenido a NotiChileC", "welcome.md", { nombre, email: to });
+}
+
+/**
+ * Envía email de verificación con magic link + OTP.
+ */
+export async function sendVerificationEmail(
+  to: string,
+  nombre: string,
+  token: string,
+  otp: string,
+): Promise<void> {
+  const tokenUrl = `${BASE_URL}/verify?token=${encodeURIComponent(token)}`;
+  await renderAndSend(to, "Verificá tu email en NotiChileC", "verification.md", {
+    nombre,
+    token_url: tokenUrl,
+    otp,
+    email: to,
+  });
+}
+
+/**
+ * Envía email de restablecimiento de contraseña con link.
+ */
+export async function sendPasswordResetEmail(
+  to: string,
+  nombre: string,
+  token: string,
+): Promise<void> {
+  const resetUrl = `${BASE_URL}/reset-password?token=${encodeURIComponent(token)}`;
+  await renderAndSend(to, "Restablecé tu contraseña en NotiChileC", "reset-password.md", {
+    nombre,
+    reset_url: resetUrl,
+    email: to,
+  });
 }
