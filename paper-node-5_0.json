@@ -1,0 +1,39 @@
+{
+  "info": {
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"id\": \"5-0\",\n  \"name\": \"Red Rectangle\",\n  \"component\": \"Frame\",\n  \"width\": 160,\n  \"height\": 100,\n  \"isVisible\": true,\n  \"isLocked\": false,\n  \"parentId\": \"4-0\",\n  \"childIds\": [],\n  \"childCount\": 0,\n  \"artboardId\": \"4-0\",\n  \"textContent\": null\n}"
+        }
+      ]
+    },
+    "jsonrpc": "2.0",
+    "id": 2
+  },
+  "styles": {
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"5-0\": {\n    \"display\": \"flex\",\n    \"width\": \"160px\",\n    \"height\": \"100px\",\n    \"borderRadius\": \"0px\",\n    \"backgroundColor\": \"#FF0000\",\n    \"flexShrink\": \"0\"\n  }\n}"
+        }
+      ]
+    },
+    "jsonrpc": "2.0",
+    "id": 3
+  },
+  "screenshot": {
+    "result": {
+      "content": [
+        {
+          "type": "image",
+          "data": "/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCABkAKADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFgEBAQEAAAAAAAAAAAAAAAAAAAcJ/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8AnQBDGqYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//Z",
+          "mimeType": "image/jpeg"
+        }
+      ]
+    },
+    "jsonrpc": "2.0",
+    "id": 4
+  }
+}

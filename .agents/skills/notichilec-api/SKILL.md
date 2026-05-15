@@ -6,7 +6,7 @@ description: >
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.0"
+  version: "2.0"
 ---
 
 ## When to Use
@@ -31,15 +31,27 @@ metadata:
 
 ```
 server/src/
-├── server.ts        # Express + cron setup
-├── worker.ts        # Sync cycle (scraper + API + push)
-├── scraper.ts       # Scraper de ChileCompra
-├── chilecompra.ts   # Cliente API ChileCompra
-├── push.ts          # Expo Push helpers
-├── db.ts            # PostgreSQL pool
+├── server.ts              # Bootstrap combinado (API + worker)
+├── api-server.ts          # Bootstrap API solo
+├── app.ts                 # Express app (middleware, routes, error handler)
+├── worker.ts              # 5 ciclos del worker
+├── worker-runtime.ts      # Scheduler cron + run-with-lock
+├── scraper.ts             # Scraper de ChileCompra
+├── chilecompra.ts         # Cliente API ChileCompra
+├── push.ts                # Expo Push provider
+├── push-provider.ts       # Interfaces PushProvider
+├── db.ts                  # PostgreSQL pool
+├── notification-targeting.ts  # Matching preferencias
+├── feed-sort.ts           # Modos de ordenamiento
+├── archive-jobs.ts        # Exportación Parquet + S3
+├── archive-storage.ts     # S3 client
+├── observability/         # Logger, Sentry, métricas
+├── types/                 # Tipos compartidos
 └── routes/
-    ├── devices.ts   # POST /api/devices/register
-    └── licitaciones.ts  # GET /api/licitaciones
+    ├── devices.ts         # POST /api/devices/register
+    ├── installations.ts   # POST /api/installations/sync
+    ├── licitaciones.ts    # GET /api/licitaciones
+    └── rubros.ts          # GET /api/rubros
 ```
 
 ### DB Schema
@@ -128,3 +140,11 @@ cd server && npx tsx scripts/test-push.ts
 - `server/src/routes/licitaciones.ts` — Endpoint de licitaciones
 - `server/.env` — Variables de entorno (NO commitear)
 - `server/bootstrap.sql` — Schema inicial de DB
+
+## Referencias
+
+- TypeScript patterns: `.agents/skills/notichilec-typescript/SKILL.md` + `docs/plans/typescript-patterns.md`
+- NotiChileC project: `.agents/skills/notichilec-project/SKILL.md`
+- DB schema: `.agents/skills/notichilec-db/SKILL.md`
+- Backend architecture (server layers, idempotency, graceful degradation): `.agents/skills/notichilec-backend-architecture/SKILL.md`
+- Worker architecture (5 cycles, FOR UPDATE SKIP LOCKED, saga choreography): `.agents/skills/notichilec-worker-architecture/SKILL.md`
