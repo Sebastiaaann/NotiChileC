@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── Mocks ──────────────────────────────────────────────
 
-const { queryMock, queryOneMock, checkDatabaseReadyMock, getPoolStatsMock } =
+const { queryMock, queryOneMock, checkDatabaseReadyMock, getPoolStatsMock, dbSelectMock, dbInsertMock, dbUpdateMock } =
   vi.hoisted(() => ({
     queryMock: vi.fn(),
     queryOneMock: vi.fn(),
     checkDatabaseReadyMock: vi.fn(),
     getPoolStatsMock: vi.fn(),
+    dbSelectMock: vi.fn(),
+    dbInsertMock: vi.fn(),
+    dbUpdateMock: vi.fn(),
   }));
 
 // We'll capture mock references lazily via beforeAll
@@ -26,13 +29,43 @@ vi.mock("../src/db", () => ({
   queryOne: queryOneMock,
   checkDatabaseReady: checkDatabaseReadyMock,
   getPoolStats: getPoolStatsMock,
-}));
-
-vi.mock("../src/services/email", () => ({
-  sendWelcomeEmail: vi.fn(() => Promise.resolve()),
-  sendVerificationEmail: vi.fn(() => Promise.resolve()),
-  sendPasswordResetEmail: vi.fn(() => Promise.resolve()),
-}));
+  db: {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => {
+          // Lazy thenable: when .limit() is called, it resolves. If no .limit() (OTP case),
+          // the setTimeout fallback resolves via dbSelectMock.
+          let resolved = false;
+          let resolvePromise: (v: unknown) => void;
+          const promise = new Promise(resolve => { resolvePromise = resolve; });
+          setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              resolvePromise(dbSelectMock());
+            }
+          }, 0);
+          return Object.assign(promise, {
+            limit: vi.fn(() => {
+              resolved = true;
+              return Promise.resolve(dbSelectMock());
+            }),
+          });
+        }),
+      })),
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({
+        returning: vi.fn(() => dbInsertMock()),
+      })),
+    })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(() => dbUpdateMock()),
+      })),
+    })),
+    execute: vi.fn(() => dbUpdateMock()),
+  },
+} as any));
 
 // ── Helpers: auth-utils (pure functions) ───────────────
 
@@ -147,20 +180,20 @@ describe("POST /api/auth/register", () => {
   });
 
   it("creates user, returns verified=false, sends verification email", async () => {
-    queryOneMock
-      .mockResolvedValueOnce(null) // no existing user
-      .mockResolvedValueOnce({
-        // inserted user
-        id: "user-1",
-        nombre: "Test User",
-        email: "test@example.com",
-        password_hash: "hashed",
-        created_at: new Date().toISOString(),
-        verification_token: "abc-123",
-        verification_token_expires_at: new Date(
-          Date.now() + 10 * 60 * 1000,
-        ).toISOString(),
-      });
+    dbSelectMock.mockResolvedValueOnce([]); // no existing user
+    dbInsertMock.mockResolvedValueOnce([{
+      // inserted user
+      id: "user-1",
+      nombre: "Test User",
+      email: "test@example.com",
+      password_hash: "hashed",
+      created_at: new Date().toISOString(),
+      email_verified_at: null,
+      verification_token: "abc-123",
+      verification_token_expires_at: new Date(
+        Date.now() + 10 * 60 * 1000,
+      ).toISOString(),
+    }]);
 
     const { createApp } = await import("../src/app");
     const app = createApp();
@@ -188,7 +221,7 @@ describe("POST /api/auth/register", () => {
   });
 
   it("returns 409 for duplicate email", async () => {
-    queryOneMock.mockResolvedValueOnce({ id: "existing" });
+    dbSelectMock.mockResolvedValueOnce([{ id: "existing" }]);
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -217,14 +250,14 @@ describe("POST /api/auth/login", () => {
   });
 
   it("returns verified=true when email_verified_at is set", async () => {
-    queryOneMock.mockResolvedValueOnce({
+    dbSelectMock.mockResolvedValueOnce([{
       id: "user-1",
       nombre: "Test User",
       email: "test@example.com",
       password_hash: await bcrypt.hash("password123", 10),
       created_at: new Date().toISOString(),
       email_verified_at: new Date().toISOString(),
-    });
+    }]);
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -236,14 +269,14 @@ describe("POST /api/auth/login", () => {
   });
 
   it("returns verified=false when email_verified_at is null", async () => {
-    queryOneMock.mockResolvedValueOnce({
+    dbSelectMock.mockResolvedValueOnce([{
       id: "user-2",
       nombre: "Unverified",
       email: "unverified@example.com",
       password_hash: await bcrypt.hash("password123", 10),
       created_at: new Date().toISOString(),
       email_verified_at: null,
-    });
+    }]);
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -255,10 +288,10 @@ describe("POST /api/auth/login", () => {
   });
 
   it("returns 401 for wrong password", async () => {
-    queryOneMock.mockResolvedValueOnce({
+    dbSelectMock.mockResolvedValueOnce([{
       id: "user-1",
       password_hash: await bcrypt.hash("rightpass", 10),
-    });
+    }]);
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -278,20 +311,21 @@ describe("POST /api/auth/verify/confirm", () => {
 
   it("verifies with magic link token", async () => {
     const futureExpiry = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-    queryOneMock.mockResolvedValueOnce({
+    dbSelectMock.mockResolvedValueOnce([{
       id: "user-1",
       nombre: "Test",
       email: "test@example.com",
       email_verified_at: null,
       verification_token: "valid-token-uuid",
       verification_token_expires_at: futureExpiry,
-    });
-    queryOneMock.mockResolvedValueOnce({
+    }]);
+    dbUpdateMock.mockResolvedValueOnce(undefined);
+    dbSelectMock.mockResolvedValueOnce([{
       id: "user-1",
       nombre: "Test",
       email: "test@example.com",
       email_verified_at: new Date().toISOString(),
-    });
+    }]);
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -308,8 +342,8 @@ describe("POST /api/auth/verify/confirm", () => {
     const expectedOtp = "A1B2C3"; // first 6 hex chars, uppercase, no dashes
 
     const futureExpiry = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-    // OTP route uses query() (not queryOne) to find matching users
-    queryMock.mockResolvedValueOnce([
+    // OTP: select all pending verification users
+    dbSelectMock.mockResolvedValueOnce([
       {
         id: "user-1",
         nombre: "Test",
@@ -319,12 +353,13 @@ describe("POST /api/auth/verify/confirm", () => {
         verification_token_expires_at: futureExpiry,
       },
     ]);
-    queryOneMock.mockResolvedValueOnce({
+    dbUpdateMock.mockResolvedValueOnce(undefined);
+    dbSelectMock.mockResolvedValueOnce([{
       id: "user-1",
       nombre: "Test",
       email: "test@example.com",
       email_verified_at: new Date().toISOString(),
-    });
+    }]);
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -337,12 +372,12 @@ describe("POST /api/auth/verify/confirm", () => {
 
   it("returns 410 for expired token", async () => {
     const pastExpiry = new Date(Date.now() - 60 * 1000).toISOString();
-    queryOneMock.mockResolvedValueOnce({
+    dbSelectMock.mockResolvedValueOnce([{
       id: "user-1",
       email_verified_at: null,
       verification_token: "expired-token-uuid",
       verification_token_expires_at: pastExpiry,
-    });
+    }]);
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -371,20 +406,7 @@ describe("POST /api/auth/verify/send", () => {
   });
 
   it("sends new verification email for authenticated user", async () => {
-    queryOneMock.mockResolvedValueOnce({
-      id: "user-1",
-      nombre: "Test",
-      email: "test@example.com",
-      email_verified_at: null,
-      verification_token: null,
-      verification_token_expires_at: null,
-    });
-    queryOneMock.mockResolvedValueOnce({
-      id: "user-1",
-      nombre: "Test",
-      email: "test@example.com",
-      email_verified_at: null,
-    });
+    dbUpdateMock.mockResolvedValueOnce(undefined);
 
     const token = jwt.sign(
       { id: "user-1", email: "test@example.com", nombre: "Test" },
@@ -399,22 +421,14 @@ describe("POST /api/auth/verify/send", () => {
 
     expect(response.status).toBe(200);
     // Should have called update to set verification_token
-    expect(queryMock).toHaveBeenCalledWith(
-      expect.stringContaining("UPDATE users"),
-      expect.arrayContaining([expect.any(String)]),
-    );
+    expect(dbUpdateMock).toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(sendVerificationEmailMock).toHaveBeenCalled();
     });
   });
 
   it("returns 429 for rate-limited resend within 60s", async () => {
-    queryOneMock.mockResolvedValueOnce({
-      id: "user-2",
-      nombre: "Rate",
-      email: "rate@example.com",
-      email_verified_at: null,
-    });
+    dbUpdateMock.mockResolvedValueOnce(undefined);
 
     const token = jwt.sign(
       { id: "user-2", email: "rate@example.com", nombre: "Rate" },
@@ -458,7 +472,7 @@ describe("POST /api/auth/forgot-password", () => {
   });
 
   it("always returns 200 even if email does not exist", async () => {
-    queryOneMock.mockResolvedValueOnce(null); // user not found
+    dbSelectMock.mockResolvedValueOnce([]); // user not found
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -471,11 +485,12 @@ describe("POST /api/auth/forgot-password", () => {
   });
 
   it("sends reset email when user exists", async () => {
-    queryOneMock.mockResolvedValueOnce({
+    dbSelectMock.mockResolvedValueOnce([{
       id: "user-1",
       nombre: "Test",
       email: "test@example.com",
-    });
+    }]);
+    dbUpdateMock.mockResolvedValueOnce(undefined);
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -484,10 +499,7 @@ describe("POST /api/auth/forgot-password", () => {
 
     expect(response.status).toBe(200);
     // Should have updated reset_token in DB
-    expect(queryMock).toHaveBeenCalledWith(
-      expect.stringContaining("UPDATE users"),
-      expect.arrayContaining([expect.any(String)]),
-    );
+    expect(dbUpdateMock).toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(sendPasswordResetEmailMock).toHaveBeenCalledWith(
         "test@example.com",
@@ -516,14 +528,15 @@ describe("POST /api/auth/reset-password", () => {
 
   it("resets password with valid token", async () => {
     const futureExpiry = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-    queryOneMock.mockResolvedValueOnce({
+    dbSelectMock.mockResolvedValueOnce([{
       id: "user-1",
       nombre: "Test",
       email: "test@example.com",
       password_hash: await bcrypt.hash("oldpassword", 10),
       reset_token: "valid-reset-token",
       reset_token_expires_at: futureExpiry,
-    });
+    }]);
+    dbUpdateMock.mockResolvedValueOnce(undefined);
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -532,14 +545,11 @@ describe("POST /api/auth/reset-password", () => {
 
     expect(response.status).toBe(200);
     // Should update password and clear reset fields
-    expect(queryMock).toHaveBeenCalledWith(
-      expect.stringContaining("UPDATE users"),
-      expect.arrayContaining([expect.any(String)]),
-    );
+    expect(dbUpdateMock).toHaveBeenCalled();
   });
 
   it("returns 401 for invalid token", async () => {
-    queryOneMock.mockResolvedValueOnce(null); // no matching reset token
+    dbSelectMock.mockResolvedValueOnce([]); // no matching reset token
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())
@@ -551,11 +561,11 @@ describe("POST /api/auth/reset-password", () => {
 
   it("returns 401 for expired token", async () => {
     const pastExpiry = new Date(Date.now() - 60 * 1000).toISOString();
-    queryOneMock.mockResolvedValueOnce({
+    dbSelectMock.mockResolvedValueOnce([{
       id: "user-1",
       reset_token: "expired-token",
       reset_token_expires_at: pastExpiry,
-    });
+    }]);
 
     const { createApp } = await import("../src/app");
     const response = await request(createApp())

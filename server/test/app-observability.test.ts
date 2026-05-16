@@ -17,7 +17,12 @@ vi.mock("../src/db", () => ({
   queryResult: vi.fn(),
   getPoolStats: getPoolStatsMock,
   checkDatabaseReady: checkDatabaseReadyMock,
-}));
+  db: {
+    select: vi.fn(() => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve([]), then: (fn: any) => Promise.resolve([]).then(fn) }) }) })),
+    insert: vi.fn(() => ({ values: () => ({ returning: () => Promise.resolve([{}]) }) })),
+    update: vi.fn(() => ({ set: () => ({ where: () => Promise.resolve(undefined) }) })),
+  },
+} as any));
 
 describe("app observability", () => {
   beforeEach(() => {

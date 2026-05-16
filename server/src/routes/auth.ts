@@ -1,7 +1,10 @@
 import { Router, type Request, type Response } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { query, queryOne } from "../db";
+import { eq, and, isNull, isNotNull, lt } from "drizzle-orm";
+import { sql } from "drizzle-orm";
+import { db } from "../db";
+import { users } from "../db/schema/users";
 import { apiLogger } from "../observability/logger";
 import { sendWelcomeEmail, sendVerificationEmail, sendPasswordResetEmail } from "../services/email";
 import { generateVerificationToken, generateResetToken, validateOtp } from "../services/auth-utils";
@@ -9,19 +12,6 @@ import { generateVerificationToken, generateResetToken, validateOtp } from "../s
 const JWT_SECRET = process.env.JWT_SECRET || "notichilec-dev-secret-change-in-prod";
 const SALT_ROUNDS = 10;
 const TOKEN_EXPIRY = "24h";
-
-interface UserRow extends Record<string, unknown> {
-  id: string;
-  nombre: string;
-  email: string;
-  password_hash: string;
-  created_at: string;
-  email_verified_at: string | null;
-  verification_token: string | null;
-  verification_token_expires_at: string | null;
-  reset_token: string | null;
-  reset_token_expires_at: string | null;
-}
 
 // ── Rate limiting (in-memory) ────────────────────────
 
@@ -49,7 +39,12 @@ function generateToken(user: { id: string; email: string; nombre: string }): str
   );
 }
 
-function sanitizeUser(row: UserRow) {
+function sanitizeUser(row: {
+  id: string;
+  nombre: string;
+  email: string;
+  email_verified_at: Date | string | null;
+}) {
   return {
     id: row.id,
     nombre: row.nombre,
@@ -115,10 +110,13 @@ router.post("/register", async (req: Request, res: Response) => {
       return;
     }
 
-    const existing = await queryOne<UserRow>(
-      "SELECT id FROM users WHERE email = $1",
-      [email],
-    );
+    const existing = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1)
+      .then(rows => rows[0] ?? null);
+
     if (existing) {
       res.status(409).json({ message: "El email ya está registrado" });
       return;
@@ -127,12 +125,16 @@ router.post("/register", async (req: Request, res: Response) => {
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
     const { token: verificationToken, otp, expiresAt } = generateVerificationToken();
 
-    const user = await queryOne<UserRow>(
-      `INSERT INTO users (nombre, email, password_hash, verification_token, verification_token_expires_at)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, nombre, email, password_hash, created_at, email_verified_at, verification_token, verification_token_expires_at`,
-      [nombre, email, passwordHash, verificationToken, expiresAt.toISOString()],
-    );
+    const [user] = await db
+      .insert(users)
+      .values({
+        nombre,
+        email,
+        password_hash: passwordHash,
+        verification_token: verificationToken,
+        verification_token_expires_at: expiresAt,
+      })
+      .returning();
 
     if (!user) {
       res.status(500).json({ message: "Error al crear usuario" });
@@ -182,10 +184,11 @@ router.post("/login", async (req: Request, res: Response) => {
       return;
     }
 
-    const user = await queryOne<UserRow>(
-      "SELECT id, nombre, email, password_hash, created_at, email_verified_at FROM users WHERE email = $1",
-      [email],
-    );
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
 
     if (!user) {
       res.status(401).json({ message: "Email o contraseña incorrectos" });
@@ -228,17 +231,29 @@ router.get("/session", async (req: Request, res: Response) => {
 
     const decoded = jwt.verify(token, JWT_SECRET) as { id: string; email: string; nombre: string };
 
-    const user = await queryOne<UserRow>(
-      "SELECT id, nombre, email, created_at, email_verified_at FROM users WHERE id = $1",
-      [decoded.id],
-    );
+    const [user] = await db
+      .select({
+        id: users.id,
+        nombre: users.nombre,
+        email: users.email,
+        created_at: users.created_at,
+        email_verified_at: users.email_verified_at,
+      })
+      .from(users)
+      .where(eq(users.id, decoded.id))
+      .limit(1);
 
     if (!user) {
       res.status(401).json({ message: "Usuario no encontrado" });
       return;
     }
 
-    res.json(sanitizeUser(user));
+    res.json({
+      id: user.id,
+      nombre: user.nombre,
+      email: user.email,
+      email_verified_at: user.email_verified_at ?? null,
+    });
   } catch {
     res.status(401).json({ message: "Token inválido o expirado" });
   }
@@ -268,10 +283,13 @@ router.post("/verify/send", async (req: Request, res: Response) => {
 
     const { token: verificationToken, otp, expiresAt } = generateVerificationToken();
 
-    await query(
-      `UPDATE users SET verification_token = $1, verification_token_expires_at = $2 WHERE id = $3`,
-      [verificationToken, expiresAt.toISOString(), decoded.id],
-    );
+    await db
+      .update(users)
+      .set({
+        verification_token: verificationToken,
+        verification_token_expires_at: expiresAt,
+      })
+      .where(eq(users.id, decoded.id));
 
     // Fire-and-forget
     sendVerificationEmail(decoded.email, decoded.nombre, verificationToken, otp).catch((err) =>
@@ -303,11 +321,22 @@ router.post("/verify/confirm", async (req: Request, res: Response) => {
     if (providedOtp) {
       // We need to search all users with non-null verification_token and check OTP match
       // Fetch users who have a pending verification token
-      const pendingUsers = await query<UserRow>(
-        `SELECT id, nombre, email, email_verified_at, verification_token, verification_token_expires_at
-         FROM users
-         WHERE verification_token IS NOT NULL AND verification_token_expires_at IS NOT NULL`,
-      );
+      const pendingUsers = await db
+        .select({
+          id: users.id,
+          nombre: users.nombre,
+          email: users.email,
+          email_verified_at: users.email_verified_at,
+          verification_token: users.verification_token,
+          verification_token_expires_at: users.verification_token_expires_at,
+        })
+        .from(users)
+        .where(
+          and(
+            isNotNull(users.verification_token),
+            isNotNull(users.verification_token_expires_at),
+          ),
+        );
 
       const matchedUser = pendingUsers.find((u) => {
         if (!u.verification_token) return false;
@@ -325,15 +354,25 @@ router.post("/verify/confirm", async (req: Request, res: Response) => {
         return;
       }
 
-      await query(
-        `UPDATE users SET email_verified_at = NOW(), verification_token = NULL, verification_token_expires_at = NULL WHERE id = $1`,
-        [matchedUser.id],
-      );
+      await db
+        .update(users)
+        .set({
+          email_verified_at: sql`NOW()`,
+          verification_token: null,
+          verification_token_expires_at: null,
+        })
+        .where(eq(users.id, matchedUser.id));
 
-      const updated = await queryOne<UserRow>(
-        `SELECT id, nombre, email, email_verified_at FROM users WHERE id = $1`,
-        [matchedUser.id],
-      );
+      const [updated] = await db
+        .select({
+          id: users.id,
+          nombre: users.nombre,
+          email: users.email,
+          email_verified_at: users.email_verified_at,
+        })
+        .from(users)
+        .where(eq(users.id, matchedUser.id))
+        .limit(1);
 
       apiLogger.info("email_verified_by_otp", { user_id: matchedUser.id });
 
@@ -342,11 +381,18 @@ router.post("/verify/confirm", async (req: Request, res: Response) => {
     }
 
     // Token-based verification
-    const user = await queryOne<UserRow>(
-      `SELECT id, nombre, email, email_verified_at, verification_token, verification_token_expires_at
-       FROM users WHERE verification_token = $1`,
-       [providedToken!],
-    );
+    const [user] = await db
+      .select({
+        id: users.id,
+        nombre: users.nombre,
+        email: users.email,
+        email_verified_at: users.email_verified_at,
+        verification_token: users.verification_token,
+        verification_token_expires_at: users.verification_token_expires_at,
+      })
+      .from(users)
+      .where(eq(users.verification_token, providedToken!))
+      .limit(1);
 
     if (!user) {
       res.status(400).json({ message: "Token inválido o expirado" });
@@ -358,15 +404,25 @@ router.post("/verify/confirm", async (req: Request, res: Response) => {
       return;
     }
 
-    await query(
-      `UPDATE users SET email_verified_at = NOW(), verification_token = NULL, verification_token_expires_at = NULL WHERE id = $1`,
-      [user.id],
-    );
+    await db
+      .update(users)
+      .set({
+        email_verified_at: sql`NOW()`,
+        verification_token: null,
+        verification_token_expires_at: null,
+      })
+      .where(eq(users.id, user.id));
 
-    const updated = await queryOne<UserRow>(
-      `SELECT id, nombre, email, email_verified_at FROM users WHERE id = $1`,
-      [user.id],
-    );
+    const [updated] = await db
+      .select({
+        id: users.id,
+        nombre: users.nombre,
+        email: users.email,
+        email_verified_at: users.email_verified_at,
+      })
+      .from(users)
+      .where(eq(users.id, user.id))
+      .limit(1);
 
     apiLogger.info("email_verified", { user_id: user.id });
 
@@ -390,18 +446,26 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
     }
 
     // Always return 200 to prevent email enumeration
-    const user = await queryOne<UserRow>(
-      "SELECT id, nombre, email FROM users WHERE email = $1",
-      [email],
-    );
+    const [user] = await db
+      .select({
+        id: users.id,
+        nombre: users.nombre,
+        email: users.email,
+      })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
 
     if (user) {
       const { token: resetToken, expiresAt } = generateResetToken();
 
-      await query(
-        `UPDATE users SET reset_token = $1, reset_token_expires_at = $2 WHERE id = $3`,
-        [resetToken, expiresAt.toISOString(), user.id],
-      );
+      await db
+        .update(users)
+        .set({
+          reset_token: resetToken,
+          reset_token_expires_at: expiresAt,
+        })
+        .where(eq(users.id, user.id));
 
       sendPasswordResetEmail(user.email, user.nombre, resetToken).catch((err) =>
         apiLogger.error("reset_password_email_failed", {
@@ -435,11 +499,17 @@ router.post("/reset-password", async (req: Request, res: Response) => {
       return;
     }
 
-    const user = await queryOne<UserRow>(
-      `SELECT id, nombre, email, reset_token, reset_token_expires_at
-       FROM users WHERE reset_token = $1`,
-      [token],
-    );
+    const [user] = await db
+      .select({
+        id: users.id,
+        nombre: users.nombre,
+        email: users.email,
+        reset_token: users.reset_token,
+        reset_token_expires_at: users.reset_token_expires_at,
+      })
+      .from(users)
+      .where(eq(users.reset_token, token))
+      .limit(1);
 
     if (!user) {
       res.status(401).json({ message: "Token inválido o expirado" });
@@ -453,10 +523,14 @@ router.post("/reset-password", async (req: Request, res: Response) => {
 
     const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
 
-    await query(
-      `UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expires_at = NULL WHERE id = $2`,
-      [passwordHash, user.id],
-    );
+    await db
+      .update(users)
+      .set({
+        password_hash: passwordHash,
+        reset_token: null,
+        reset_token_expires_at: null,
+      })
+      .where(eq(users.id, user.id));
 
     apiLogger.info("password_reset_completed", { user_id: user.id });
 

@@ -16,9 +16,15 @@ const { ensureRuntimeSchemaMock } = vi.hoisted(() => ({
 vi.mock("../src/db", () => ({
   query: queryMock,
   queryOne: queryOneMock,
+  queryResult: vi.fn(),
   checkDatabaseReady: checkDatabaseReadyMock,
   getPoolStats: getPoolStatsMock,
-}));
+  db: {
+    select: vi.fn(() => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve([]), then: (fn: any) => Promise.resolve([]).then(fn) }) }) })),
+    insert: vi.fn(() => ({ values: () => ({ returning: () => Promise.resolve([{}]) }) })),
+    update: vi.fn(() => ({ set: () => ({ where: () => Promise.resolve(undefined) }) })),
+  },
+} as any));
 
 vi.mock("../src/runtime-schema", () => ({
   ensureRuntimeSchema: ensureRuntimeSchemaMock,

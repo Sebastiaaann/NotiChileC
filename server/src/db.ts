@@ -1,4 +1,6 @@
 import { Pool, type PoolConfig, type QueryResult } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
+import * as schema from "./db/schema/index";
 
 let pool: Pool | null = null;
 
@@ -15,6 +17,26 @@ const DEFAULT_CONNECTION_TIMEOUT_MS =
   Number(process.env.DB_CONNECTION_TIMEOUT_MS) || 5_000;
 const DEFAULT_READINESS_TIMEOUT_MS =
   Number(process.env.DB_READINESS_TIMEOUT_MS) || 1_500;
+
+/** Lazily-initialized Drizzle ORM instance (avoids TDZ + mock issues) */
+let _db: ReturnType<typeof drizzle> | null = null;
+function initDb(): ReturnType<typeof drizzle> {
+  if (!_db) {
+    _db = drizzle(getPool(), { schema });
+  }
+  return _db;
+}
+
+/**
+ * Proxy-based Drizzle instance — forwards all property access to the lazy `initDb()`.
+ * This keeps `import { db } from "../db"` working everywhere without getter calls,
+ * while avoiding TDZ at module init and allowing vitest mocks to override it.
+ */
+export const db = new Proxy({} as ReturnType<typeof drizzle>, {
+  get(_target, prop) {
+    return initDb()[prop as keyof ReturnType<typeof drizzle>];
+  },
+});
 
 function getRuntimeConnectionString(): string {
   return (

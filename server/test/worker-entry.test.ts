@@ -13,7 +13,18 @@ vi.mock("../src/worker-runtime", () => ({
 }));
 
 vi.mock("../src/db", () => ({
+  query: vi.fn(),
+  queryOne: vi.fn(),
+  queryResult: vi.fn(),
   closePool: closePoolMock,
+  checkDatabaseReady: vi.fn(),
+  getPoolStats: vi.fn(),
+  db: {
+    select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => Promise.resolve([])) })) })),
+    insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn(() => Promise.resolve([])) })) })),
+    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(() => Promise.resolve(undefined)) })) })),
+    execute: vi.fn(() => Promise.resolve(undefined)),
+  },
 }));
 
 describe("worker-entry", () => {
