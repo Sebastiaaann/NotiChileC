@@ -1,5 +1,7 @@
 import { Router, type Request, type Response } from "express";
-import { query, queryOne } from "../db";
+import { db } from "../db";
+import { deviceInstallations, deviceTokens, notificationPreferences } from "../db/schema";
+import { eq, sql } from "drizzle-orm";
 import { apiLogger } from "../observability/logger";
 import { captureException } from "../observability/sentry";
 
@@ -239,284 +241,231 @@ function mapPreferences(row: NotificationPreferencesRow): PreferencesResponse {
   };
 }
 
-async function ensureInstallationExists(
-  installationId: string
-): Promise<DeviceInstallationRow | null> {
-  return queryOne<DeviceInstallationRow>(
-    `SELECT installation_id, push_token, platform, environment, app_version,
-            push_capable, permission_status, active, invalidated_at, invalid_reason,
-            last_seen_at, created_at, updated_at
-     FROM device_installations
-     WHERE installation_id = $1`,
-    [installationId]
-  );
-}
-
-async function ensurePreferencesRow(installationId: string): Promise<PreferencesResponse> {
-  await query(
-    `INSERT INTO notification_preferences (
-       installation_id, enabled, rubro, tipo, region, monto_min, monto_max, updated_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-     ON CONFLICT (installation_id) DO NOTHING`,
-    [
-      installationId,
-      DEFAULT_PREFERENCES.enabled,
-      DEFAULT_PREFERENCES.rubro,
-      DEFAULT_PREFERENCES.tipo,
-      DEFAULT_PREFERENCES.region,
-      DEFAULT_PREFERENCES.montoMin,
-      DEFAULT_PREFERENCES.montoMax,
-    ]
-  );
-
-  const row = await queryOne<NotificationPreferencesRow>(
-    `SELECT installation_id, enabled, rubro, tipo, region, monto_min, monto_max, updated_at
-     FROM notification_preferences
-     WHERE installation_id = $1`,
-    [installationId]
-  );
-
-  if (!row) {
-    throw new Error("No se pudo leer preferencias de la instalación");
-  }
-
-  return mapPreferences(row);
-}
-
-async function updateDeviceTokenMirror(
-  installationId: string,
-  payload: InstallationSyncBody,
-  previousInstallationId?: string
-): Promise<void> {
-  if (previousInstallationId && previousInstallationId !== installationId) {
-    await query(
-      `UPDATE device_tokens
-       SET installation_id = $2
-       WHERE installation_id = $1`,
-      [previousInstallationId, installationId]
-    );
-  }
-
-  if (payload.pushToken === null || !payload.pushCapable || payload.permissionStatus !== "granted" || payload.environment === "expo-go") {
-    await query(
-      `UPDATE device_tokens
-       SET active = FALSE,
-           installation_id = COALESCE(installation_id, $2),
-           last_seen_at = NOW()
-       WHERE installation_id = $1`,
-      [installationId, installationId]
-    );
-    return;
-  }
-
-  await query(
-    `UPDATE device_tokens
-     SET active = FALSE,
-         last_seen_at = NOW()
-     WHERE installation_id = $1
-       AND expo_push_token <> $2`,
-    [installationId, payload.pushToken]
-  );
-
-  await query(
-    `INSERT INTO device_tokens (
-       expo_push_token, installation_id, platform, active, last_seen_at
-     ) VALUES ($1, $2, $3, TRUE, NOW())
-     ON CONFLICT (expo_push_token) DO UPDATE SET
-       installation_id = EXCLUDED.installation_id,
-       platform = EXCLUDED.platform,
-       active = TRUE,
-       last_seen_at = NOW()`,
-    [payload.pushToken, installationId, payload.platform]
-  );
-}
-
 async function syncInstallationInternal(
   installationId: string,
   payload: InstallationSyncBody
 ): Promise<SyncResult> {
-  const existingById = await ensureInstallationExists(installationId);
-  const existingByToken =
-    payload.pushToken === null
-      ? null
-      : await queryOne<DeviceInstallationRow>(
-          `SELECT installation_id, push_token, platform, environment, app_version,
-                  push_capable, permission_status, active, invalidated_at, invalid_reason,
-                  last_seen_at, created_at, updated_at
-           FROM device_installations
-           WHERE push_token = $1`,
-          [payload.pushToken]
+  return db.transaction(async (tx) => {
+    const existingById = await tx.select()
+      .from(deviceInstallations)
+      .where(eq(deviceInstallations.installation_id, installationId))
+      .limit(1)
+      .then(rows => (rows[0] as unknown as DeviceInstallationRow) ?? null);
+
+    const existingByToken =
+      payload.pushToken === null
+        ? null
+        : await tx.select()
+            .from(deviceInstallations)
+            .where(eq(deviceInstallations.push_token, payload.pushToken))
+            .limit(1)
+            .then(rows => (rows[0] as unknown as DeviceInstallationRow) ?? null);
+
+    if (existingById && existingByToken && existingByToken.installation_id !== installationId) {
+      const error = new Error(
+        "pushToken ya está asociado a otra instalación"
+      );
+      (error as Error & { statusCode?: number }).statusCode = 409;
+      throw error;
+    }
+
+    const state = computeInstallationState(payload);
+    const now = sql`NOW()`;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const setData: Record<string, any> = {
+      push_token: payload.pushToken,
+      platform: payload.platform,
+      environment: payload.environment,
+      app_version: payload.appVersion,
+      push_capable: payload.pushCapable,
+      permission_status: payload.permissionStatus,
+      active: state.active,
+      invalidated_at: state.invalidatedAt ?? null,
+      invalid_reason: state.invalidReason,
+      last_seen_at: now,
+      updated_at: now,
+    };
+
+    let installationRow: DeviceInstallationRow | null = null;
+
+    if (existingById) {
+      const rows = await tx.update(deviceInstallations)
+        .set(setData)
+        .where(eq(deviceInstallations.installation_id, installationId))
+        .returning();
+      installationRow = (rows[0] as unknown as DeviceInstallationRow) ?? null;
+    } else if (existingByToken) {
+      const rows = await tx.update(deviceInstallations)
+        .set({
+          installation_id: installationId,
+          ...setData,
+        })
+        .where(eq(deviceInstallations.installation_id, existingByToken.installation_id))
+        .returning();
+      installationRow = (rows[0] as unknown as DeviceInstallationRow) ?? null;
+
+      await tx.update(deviceTokens)
+        .set({ installation_id: installationId })
+        .where(eq(deviceTokens.installation_id, existingByToken.installation_id));
+    } else {
+      const rows = await tx.insert(deviceInstallations)
+        .values({
+          installation_id: installationId,
+          ...setData,
+        })
+        .returning();
+      installationRow = (rows[0] as unknown as DeviceInstallationRow) ?? null;
+    }
+
+    if (!installationRow) {
+      throw new Error("No se pudo guardar la instalación");
+    }
+
+    // Mirror to device_tokens
+    if (payload.pushToken === null || !payload.pushCapable || payload.permissionStatus !== "granted" || payload.environment === "expo-go") {
+      await tx.update(deviceTokens)
+        .set({
+          active: false,
+          installation_id: sql`COALESCE(installation_id, ${installationId})`,
+          last_seen_at: now,
+        })
+        .where(eq(deviceTokens.installation_id, installationId));
+    } else {
+      await tx.update(deviceTokens)
+        .set({
+          active: false,
+          last_seen_at: now,
+        })
+        .where(
+          sql`${deviceTokens.installation_id} = ${installationId} AND ${deviceTokens.expo_push_token} <> ${payload.pushToken}`
         );
 
-  if (existingById && existingByToken && existingByToken.installation_id !== installationId) {
-    const error = new Error(
-      "pushToken ya está asociado a otra instalación"
-    );
-    (error as Error & { statusCode?: number }).statusCode = 409;
-    throw error;
-  }
+      await tx.insert(deviceTokens)
+        .values({
+          expo_push_token: payload.pushToken,
+          installation_id: installationId,
+          platform: payload.platform,
+          active: true,
+          last_seen_at: now,
+        })
+        .onConflictDoUpdate({
+          target: deviceTokens.expo_push_token,
+          set: {
+            installation_id: installationId,
+            platform: payload.platform,
+            active: true,
+            last_seen_at: now,
+          },
+        });
+    }
 
-  const state = computeInstallationState(payload);
-  let installationRow: DeviceInstallationRow | null = null;
+    // Ensure preferences row exists
+    await tx.insert(notificationPreferences)
+      .values({
+        installation_id: installationId,
+        enabled: DEFAULT_PREFERENCES.enabled,
+        rubro: DEFAULT_PREFERENCES.rubro,
+        tipo: DEFAULT_PREFERENCES.tipo,
+        region: DEFAULT_PREFERENCES.region,
+        monto_min: DEFAULT_PREFERENCES.montoMin?.toString() ?? null,
+        monto_max: DEFAULT_PREFERENCES.montoMax?.toString() ?? null,
+        updated_at: now,
+      })
+      .onConflictDoNothing();
 
-  if (existingById) {
-    const rows = await query<DeviceInstallationRow>(
-      `UPDATE device_installations SET
-         push_token = $2,
-         platform = $3,
-         environment = $4,
-         app_version = $5,
-         push_capable = $6,
-         permission_status = $7,
-         active = $8,
-         invalidated_at = $9,
-         invalid_reason = $10,
-         last_seen_at = NOW(),
-         updated_at = NOW()
-       WHERE installation_id = $1
-       RETURNING installation_id, push_token, platform, environment, app_version,
-                 push_capable, permission_status, active, invalidated_at, invalid_reason,
-                 last_seen_at, created_at, updated_at`,
-      [
-        installationId,
-        payload.pushToken,
-        payload.platform,
-        payload.environment,
-        payload.appVersion,
-        payload.pushCapable,
-        payload.permissionStatus,
-        state.active,
-        state.invalidatedAt,
-        state.invalidReason,
-      ]
-    );
+    const prefRow = await tx.select()
+      .from(notificationPreferences)
+      .where(eq(notificationPreferences.installation_id, installationId))
+      .limit(1)
+      .then(rows => rows[0] as unknown as NotificationPreferencesRow | undefined);
 
-    installationRow = rows[0] ?? null;
-  } else if (existingByToken) {
-    const previousInstallationId = existingByToken.installation_id;
-    const rows = await query<DeviceInstallationRow>(
-      `UPDATE device_installations SET
-         installation_id = $1,
-         platform = $3,
-         environment = $4,
-         app_version = $5,
-         push_capable = $6,
-         permission_status = $7,
-         active = $8,
-         invalidated_at = $9,
-         invalid_reason = $10,
-         last_seen_at = NOW(),
-         updated_at = NOW()
-       WHERE installation_id = $2
-       RETURNING installation_id, push_token, platform, environment, app_version,
-                 push_capable, permission_status, active, invalidated_at, invalid_reason,
-                 last_seen_at, created_at, updated_at`,
-      [
-        installationId,
-        existingByToken.installation_id,
-        payload.platform,
-        payload.environment,
-        payload.appVersion,
-        payload.pushCapable,
-        payload.permissionStatus,
-        state.active,
-        state.invalidatedAt,
-        state.invalidReason,
-      ]
-    );
+    if (!prefRow) {
+      throw new Error("No se pudo leer preferencias de la instalación");
+    }
 
-    installationRow = rows[0] ?? null;
-
-    await query(
-      `UPDATE device_tokens
-       SET installation_id = $2
-       WHERE installation_id = $1`,
-      [previousInstallationId, installationId]
-    );
-  } else {
-    const rows = await query<DeviceInstallationRow>(
-      `INSERT INTO device_installations (
-         installation_id, push_token, platform, environment, app_version,
-         push_capable, permission_status, active, invalidated_at, invalid_reason,
-         last_seen_at, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW(), NOW())
-       RETURNING installation_id, push_token, platform, environment, app_version,
-                 push_capable, permission_status, active, invalidated_at, invalid_reason,
-                 last_seen_at, created_at, updated_at`,
-      [
-        installationId,
-        payload.pushToken,
-        payload.platform,
-        payload.environment,
-        payload.appVersion,
-        payload.pushCapable,
-        payload.permissionStatus,
-        state.active,
-        state.invalidatedAt,
-        state.invalidReason,
-      ]
-    );
-
-    installationRow = rows[0] ?? null;
-  }
-
-  if (!installationRow) {
-    throw new Error("No se pudo guardar la instalación");
-  }
-
-  await updateDeviceTokenMirror(installationId, payload);
-  const preferences = await ensurePreferencesRow(installationId);
-
-  return {
-    installation: mapInstallation(installationRow),
-    preferences,
-  };
+    return {
+      installation: mapInstallation(installationRow),
+      preferences: mapPreferences(prefRow),
+    };
+  });
 }
 
 export async function getPreferencesForInstallation(
   installationId: string
 ): Promise<PreferencesResponse | null> {
-  const installation = await ensureInstallationExists(installationId);
+  const installation = await db.select()
+    .from(deviceInstallations)
+    .where(eq(deviceInstallations.installation_id, installationId))
+    .limit(1)
+    .then(rows => rows[0] as unknown as DeviceInstallationRow | undefined);
   if (!installation) return null;
-  return ensurePreferencesRow(installationId);
+
+  await db.insert(notificationPreferences)
+    .values({
+      installation_id: installationId,
+      enabled: DEFAULT_PREFERENCES.enabled,
+      rubro: DEFAULT_PREFERENCES.rubro,
+      tipo: DEFAULT_PREFERENCES.tipo,
+      region: DEFAULT_PREFERENCES.region,
+      monto_min: DEFAULT_PREFERENCES.montoMin?.toString() ?? null,
+      monto_max: DEFAULT_PREFERENCES.montoMax?.toString() ?? null,
+      updated_at: sql`NOW()`,
+    })
+    .onConflictDoNothing();
+
+  const prefRow = await db.select()
+    .from(notificationPreferences)
+    .where(eq(notificationPreferences.installation_id, installationId))
+    .limit(1)
+    .then(rows => rows[0] as unknown as NotificationPreferencesRow | undefined);
+
+  if (!prefRow) {
+    throw new Error("No se pudo leer preferencias de la instalación");
+  }
+  return mapPreferences(prefRow);
 }
 
 export async function updatePreferencesForInstallation(
   installationId: string,
   payload: NotificationPreferencesBody
 ): Promise<PreferencesResponse | null> {
-  const installation = await ensureInstallationExists(installationId);
+  const installation = await db.select()
+    .from(deviceInstallations)
+    .where(eq(deviceInstallations.installation_id, installationId))
+    .limit(1)
+    .then(rows => rows[0] as unknown as DeviceInstallationRow | undefined);
   if (!installation) return null;
 
-  await query(
-    `INSERT INTO notification_preferences (
-       installation_id, enabled, rubro, tipo, region, monto_min, monto_max, updated_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-     ON CONFLICT (installation_id) DO UPDATE SET
-       enabled = EXCLUDED.enabled,
-       rubro = EXCLUDED.rubro,
-       tipo = EXCLUDED.tipo,
-       region = EXCLUDED.region,
-       monto_min = EXCLUDED.monto_min,
-       monto_max = EXCLUDED.monto_max,
-       updated_at = NOW()`,
-    [
-      installationId,
-      payload.enabled,
-      payload.rubro,
-      payload.tipo,
-      payload.region,
-      payload.montoMin,
-      payload.montoMax,
-    ]
-  );
+  await db.insert(notificationPreferences)
+    .values({
+      installation_id: installationId,
+      enabled: payload.enabled,
+      rubro: payload.rubro,
+      tipo: payload.tipo,
+      region: payload.region,
+      monto_min: payload.montoMin?.toString() ?? null,
+      monto_max: payload.montoMax?.toString() ?? null,
+      updated_at: sql`NOW()`,
+    })
+    .onConflictDoUpdate({
+      target: notificationPreferences.installation_id,
+      set: {
+        enabled: payload.enabled,
+        rubro: payload.rubro,
+        tipo: payload.tipo,
+        region: payload.region,
+        monto_min: payload.montoMin?.toString() ?? null,
+        monto_max: payload.montoMax?.toString() ?? null,
+        updated_at: sql`NOW()`,
+      },
+    });
 
-  const row = await queryOne<NotificationPreferencesRow>(
-    `SELECT installation_id, enabled, rubro, tipo, region, monto_min, monto_max, updated_at
-     FROM notification_preferences
-     WHERE installation_id = $1`,
-    [installationId]
-  );
+  const row = await db.select()
+    .from(notificationPreferences)
+    .where(eq(notificationPreferences.installation_id, installationId))
+    .limit(1)
+    .then(rows => rows[0] as unknown as NotificationPreferencesRow | undefined);
 
   return row ? mapPreferences(row) : null;
 }
@@ -525,14 +474,11 @@ export async function registerLegacyDeviceFromToken(
   expoPushToken: string,
   platform?: string
 ): Promise<void> {
-  const existing = await queryOne<DeviceInstallationRow>(
-    `SELECT installation_id, push_token, platform, environment, app_version,
-            push_capable, permission_status, active, invalidated_at, invalid_reason,
-            last_seen_at, created_at, updated_at
-     FROM device_installations
-     WHERE push_token = $1`,
-    [expoPushToken]
-  );
+  const existing = await db.select()
+    .from(deviceInstallations)
+    .where(eq(deviceInstallations.push_token, expoPushToken))
+    .limit(1)
+    .then(rows => rows[0] as unknown as DeviceInstallationRow | undefined);
 
   const installationId =
     existing?.installation_id ?? buildLegacyInstallationId(expoPushToken);

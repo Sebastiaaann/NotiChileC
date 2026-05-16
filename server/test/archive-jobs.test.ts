@@ -41,52 +41,70 @@ describe("archive jobs", () => {
     const writes: Array<{ sql: string; params?: unknown[] }> = [];
     const { runArchiveExportCycle } = await import("../src/archive-jobs");
 
-    const query = vi.fn(async (sql: string, params: unknown[] = []) => {
-      if (sql.includes("FROM archive.licitaciones") && sql.includes("GROUP BY 2")) {
-        return [
-          {
-            entity: "licitaciones",
-            partition_month: "2025-03",
-            row_count: 1,
-            min_created_at: "2025-03-01T00:00:00.000Z",
-            max_created_at: "2025-03-15T00:00:00.000Z",
-          },
-        ];
+    const drizzleConfig = {
+        casing: { getColumnCasing: () => undefined },
+        escapeName: (name: string) => `"${name}"`,
+        escapeParam: (num: number) => `$${num + 1}`,
+        escapeString: (str: string) => `'${str.replace(/'/g, "''")}'`,
+        prepareTyping: () => "none" as const,
+      };
+      const drizzleSqlText = (s: any): string =>
+        typeof s === "string" ? s : (s?.SQL ?? (s?.toQuery ? s.toQuery(drizzleConfig).sql : String(s)));
+
+      const query = vi.fn(async (sql: any, params: unknown[] = []) => {
+      const sqlText = drizzleSqlText(sql);
+      if (sqlText.includes("FROM archive.licitaciones") && sqlText.includes("GROUP BY 2")) {
+        return {
+          rows: [
+            {
+              entity: "licitaciones",
+              partition_month: "2025-03",
+              row_count: 1,
+              min_created_at: "2025-03-01T00:00:00.000Z",
+              max_created_at: "2025-03-15T00:00:00.000Z",
+            },
+          ],
+          rowCount: 1, command: "", oid: 0, fields: [],
+        };
       }
-      if (sql.includes("FROM archive.notification_deliveries") && sql.includes("GROUP BY 2")) {
-        return [];
+      if (sqlText.includes("FROM archive.notification_deliveries") && sqlText.includes("GROUP BY 2")) {
+        return { rows: [], rowCount: 0, command: "", oid: 0, fields: [] };
       }
-      if (sql.includes("FROM archive_exports") && sql.includes("status IN ('verified', 'dropped')")) {
-        return [];
+      if (sqlText.includes("FROM archive_exports") && sqlText.includes("status IN ('verified', 'dropped')")) {
+        return { rows: [], rowCount: 0, command: "", oid: 0, fields: [] };
       }
-      if (sql.includes("FROM archive.licitaciones") && sql.includes("ORDER BY created_at")) {
-        return [
-          {
-            id: "LIC-1",
-            codigo_externo: "LIC-1",
-            nombre: "Licitación 1",
-            organismo_nombre: "MOP",
-            tipo: "LE",
-            monto_estimado: "1000",
-            monto_label: null,
-            moneda: "CLP",
-            fecha_publicacion: "2025-03-01T00:00:00.000Z",
-            fecha_cierre: "2025-03-15T00:00:00.000Z",
-            estado: "Publicada",
-            url: "https://example.com",
-            region: "RM",
-            categoria: "General",
-            rubro_code: "45000000",
-            notificada: false,
-            created_at: "2025-03-01T00:00:00.000Z",
-            updated_at: "2025-03-01T00:00:00.000Z",
-          },
-        ];
+      if (sqlText.includes("FROM archive.licitaciones") && sqlText.includes("ORDER BY created_at")) {
+        return {
+          rows: [
+            {
+              id: "LIC-1",
+              codigo_externo: "LIC-1",
+              nombre: "Licitación 1",
+              organismo_nombre: "MOP",
+              tipo: "LE",
+              monto_estimado: "1000",
+              monto_label: null,
+              moneda: "CLP",
+              fecha_publicacion: "2025-03-01T00:00:00.000Z",
+              fecha_cierre: "2025-03-15T00:00:00.000Z",
+              estado: "Publicada",
+              url: "https://example.com",
+              region: "RM",
+              categoria: "General",
+              rubro_code: "45000000",
+              notificada: false,
+              created_at: "2025-03-01T00:00:00.000Z",
+              updated_at: "2025-03-01T00:00:00.000Z",
+            },
+          ],
+          rowCount: 1, command: "", oid: 0, fields: [],
+        };
       }
-      if (sql.includes("WHERE status = 'verified'")) {
-        return [];
+      if (sqlText.includes("WHERE status = 'verified'")) {
+        return { rows: [], rowCount: 0, command: "", oid: 0, fields: [] };
       }
-      return [];
+      writes.push({ sql: sqlText, params });
+      return { rows: [], rowCount: 0, command: "", oid: 0, fields: [] };
     });
 
     const queryResult = vi.fn(async (sql: string, params?: unknown[]) => {
@@ -101,8 +119,10 @@ describe("archive jobs", () => {
     });
 
     const summary = await runArchiveExportCycle({
-      query: query as never,
-      queryResult: queryResult as never,
+      db: {
+        execute: query as never,
+      },
+      now: () => new Date("2026-04-02"),
     });
 
     expect(summary.exported).toBe(1);

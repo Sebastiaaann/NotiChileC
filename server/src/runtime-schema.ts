@@ -1,9 +1,10 @@
-import { queryResult } from "./db";
+import { db } from "./db";
+import { sql } from "drizzle-orm";
 
 let ensureRuntimeSchemaPromise: Promise<void> | null = null;
 
 async function runRuntimeSchemaSync(): Promise<void> {
-  await queryResult(`
+  await db.execute(sql`
     DO $$
     BEGIN
       IF to_regclass('public.licitaciones') IS NOT NULL THEN
