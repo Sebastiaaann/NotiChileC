@@ -211,6 +211,7 @@ export function scrapedToRecord(scraped: ScrapedLicitacion): LicitacionRecord {
     region: null,
     categoria: scraped.rubro ?? "General",
     rubro_code: scraped.rubro,
+    source_rank: null,
   };
 }
 

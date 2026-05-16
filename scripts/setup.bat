@@ -59,21 +59,46 @@ REM ------------------------------------------------------------
 echo.
 echo [4/5] Configurando base de datos...
 
-REM Verificar si PostgreSQL esta instalado
-where psql >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo   [ERROR] PostgreSQL no esta instalado
-    echo   Descargar desde: https://www.postgresql.org/download/windows/
-    goto :migrations
+set "DATABASE_URL="
+if exist "server\.env" (
+    for /f "tokens=1,* delims==" %%A in (server\.env) do (
+        if /I "%%A"=="DATABASE_URL" set "DATABASE_URL=%%B"
+    )
+)
+set "POSTGRES_ADMIN_URL=%DATABASE_URL:/notichilec=/postgres%"
+
+set "PSQL_CMD=C:\Program Files\PostgreSQL\17\bin\psql.exe"
+if exist "%PSQL_CMD%" (
+    echo   [OK] PostgreSQL detectado en "%PSQL_CMD%"
+) else (
+    where psql >nul 2>&1
+    if %ERRORLEVEL% neq 0 (
+        echo   [ERROR] PostgreSQL no esta instalado
+        echo   Descargar desde: https://www.postgresql.org/download/windows/
+        goto :migrations
+    )
+    for /f "delims=" %%i in ('where psql') do (
+        set "PSQL_CMD=%%i"
+        goto :psql_ready
+    )
 )
 
+:psql_ready
+
 REM Crear base de datos si no existe
-where psql >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    psql -U postgres -c "SELECT 1 FROM pg_database WHERE datname='notichilec'" 2>nul | findstr /C:"notichilec" >nul
+if exist "%PSQL_CMD%" (
+    if defined POSTGRES_ADMIN_URL (
+        "%PSQL_CMD%" "%POSTGRES_ADMIN_URL%" -tAc "SELECT 1 FROM pg_database WHERE datname='notichilec'" 2>nul | findstr /C:"1" >nul
+    ) else (
+        "%PSQL_CMD%" -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='notichilec'" 2>nul | findstr /C:"1" >nul
+    )
     if %ERRORLEVEL% neq 0 (
         echo   -> Creando base de datos notichilec...
-        psql -U postgres -c "CREATE DATABASE notichilec" 2>nul || echo   [WARN] No se pudo crear automaticamente
+        if defined POSTGRES_ADMIN_URL (
+            "%PSQL_CMD%" "%POSTGRES_ADMIN_URL%" -c "CREATE DATABASE notichilec" 2>nul || echo   [WARN] No se pudo crear automaticamente
+        ) else (
+            "%PSQL_CMD%" -U postgres -d postgres -c "CREATE DATABASE notichilec" 2>nul || echo   [WARN] No se pudo crear automaticamente
+        )
     ) else (
         echo   [OK] Base de datos notichilec ya existe
     )
@@ -89,10 +114,18 @@ echo [5/5] Ejecutando migrations...
 
 cd server
 if exist bootstrap.sql (
-    psql -U postgres -d notichilec -f bootstrap.sql 2>nul && echo   [OK] bootstrap.sql ejecutado || echo   [WARN] Error ejecutando bootstrap.sql
+    if defined DATABASE_URL (
+        "%PSQL_CMD%" "%DATABASE_URL%" -v ON_ERROR_STOP=1 -f bootstrap.sql 2>nul && echo   [OK] bootstrap.sql ejecutado || echo   [WARN] Error ejecutando bootstrap.sql
+    ) else (
+        "%PSQL_CMD%" -v ON_ERROR_STOP=1 -U postgres -d notichilec -f bootstrap.sql 2>nul && echo   [OK] bootstrap.sql ejecutado || echo   [WARN] Error ejecutando bootstrap.sql
+    )
 )
 if exist migrations\add_rubro_filters.sql (
-    psql -U postgres -d notichilec -f migrations\add_rubro_filters.sql 2>nul && echo   [OK] add_rubro_filters.sql ejecutado || echo   [WARN] Error ejecutando add_rubro_filters.sql
+    if defined DATABASE_URL (
+        "%PSQL_CMD%" "%DATABASE_URL%" -v ON_ERROR_STOP=1 -f migrations\add_rubro_filters.sql 2>nul && echo   [OK] add_rubro_filters.sql ejecutado || echo   [WARN] Error ejecutando add_rubro_filters.sql
+    ) else (
+        "%PSQL_CMD%" -v ON_ERROR_STOP=1 -U postgres -d notichilec -f migrations\add_rubro_filters.sql 2>nul && echo   [OK] add_rubro_filters.sql ejecutado || echo   [WARN] Error ejecutando add_rubro_filters.sql
+    )
 )
 cd ..
 

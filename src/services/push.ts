@@ -81,6 +81,30 @@ async function readPermissionStatus(): Promise<InstallationPermissionStatus> {
   return "undetermined";
 }
 
+export async function ensureNotificationPermissions(): Promise<InstallationPermissionStatus> {
+  let permissionStatus = await readPermissionStatus();
+
+  if (permissionStatus === "granted") {
+    return permissionStatus;
+  }
+
+  try {
+    const { status } = await Notifications.requestPermissionsAsync();
+    if (status === "granted" || status === "denied") {
+      permissionStatus = status;
+    } else {
+      permissionStatus = "undetermined";
+    }
+  } catch (error) {
+    if (__DEV__) {
+      console.warn("[push] No se pudo solicitar permiso de notificaciones:", error);
+    }
+    permissionStatus = "undetermined";
+  }
+
+  return permissionStatus;
+}
+
 export async function inspectPushRuntime(): Promise<PushRuntimeSnapshot> {
   const capability = resolveCapability();
   const permissionStatus = await readPermissionStatus();
@@ -127,19 +151,7 @@ export async function registerForPushNotifications(): Promise<PushRegistrationRe
   let permissionStatus = runtime.permissionStatus;
 
   if (permissionStatus !== "granted") {
-    try {
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status === "granted" || status === "denied") {
-        permissionStatus = status;
-      } else {
-        permissionStatus = "undetermined";
-      }
-    } catch (error) {
-      if (__DEV__) {
-        console.warn("[push] No se pudo solicitar permiso de notificaciones:", error);
-      }
-      permissionStatus = "undetermined";
-    }
+    permissionStatus = await ensureNotificationPermissions();
   }
 
   if (permissionStatus !== "granted") {
@@ -211,6 +223,30 @@ export async function registerForPushNotifications(): Promise<PushRegistrationRe
           : "Error obteniendo token push",
     };
   }
+}
+
+export async function scheduleImmediateLocalNotification(input: {
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+}): Promise<boolean> {
+  const permissionStatus = await ensureNotificationPermissions();
+
+  if (permissionStatus !== "granted") {
+    return false;
+  }
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: input.title,
+      body: input.body,
+      data: input.data ?? {},
+      sound: "default",
+    },
+    trigger: null,
+  });
+
+  return true;
 }
 
 /**

@@ -118,6 +118,7 @@ describe("workers", () => {
       region: "RM",
       categoria: "45000000",
       rubro_code: "45000000",
+      source_rank: null,
     });
 
     queryMock.mockImplementation(async (sql: string) => {
@@ -163,6 +164,10 @@ describe("workers", () => {
     expect(result.inserted).toBe(1);
     expect(result.targetsSelected).toBe(1);
     expect(result.deliveriesCreated).toBe(1);
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining("SET source_rank = $2"),
+      ["123-LE1", 1, expect.any(String)]
+    );
   });
 
   it("dispatch toma deliveries pendientes con SKIP LOCKED y actualiza envíos", async () => {

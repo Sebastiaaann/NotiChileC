@@ -2,6 +2,7 @@ import "dotenv/config";
 import { closePool } from "./db";
 import { workerLogger } from "./observability/logger";
 import { flushSentry, initSentry } from "./observability/sentry";
+import { ensureRuntimeSchema } from "./runtime-schema";
 import { executeWorker, startWorkerScheduler } from "./worker-runtime";
 
 interface WorkerEntryOptions {
@@ -11,6 +12,7 @@ interface WorkerEntryOptions {
 
 export async function runWorkerEntry(options: WorkerEntryOptions = {}) {
   initSentry("notichilec-worker");
+  await ensureRuntimeSchema();
 
   const argv = options.argv ?? process.argv;
   const exitOnFinish = options.exitOnFinish ?? true;

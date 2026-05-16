@@ -1,0 +1,23 @@
+{
+  "session": "ed837d24-15aa-4a67-a833-60632a3eabba",
+  "artboards": {
+    "NotiChileC / Doc / Handoff": "6-0",
+    "NotiChileC / UI / Feed": "7-0",
+    "NotiChileC / UI / Settings": "8-0",
+    "NotiChileC / UI / Detail": "9-0",
+    "NotiChileC / Components / Core": "A-0"
+  },
+  "screenshots": [
+    "D:\\Expo movil\\NotiChileC\\paper_outputs\\paper_components_core_v1.jpg",
+    "D:\\Expo movil\\NotiChileC\\paper_outputs\\paper_doc_handoff.jpg",
+    "D:\\Expo movil\\NotiChileC\\paper_outputs\\paper_ui_detail_v1.jpg",
+    "D:\\Expo movil\\NotiChileC\\paper_outputs\\paper_ui_feed_v1.jpg",
+    "D:\\Expo movil\\NotiChileC\\paper_outputs\\paper_ui_settings_v1.jpg"
+  ],
+  "fontsRequested": {
+    "body": "\"Inter\", sans-serif",
+    "display": "\"Plus Jakarta Sans\", sans-serif",
+    "mono": "\"JetBrains Mono\", monospace",
+    "serif": "\"Libre Baskerville\", serif"
+  }
+}

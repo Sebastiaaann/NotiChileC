@@ -28,9 +28,19 @@ import {
   sanitizeFeedFilters,
   type FeedFilters,
 } from "../../src/services/feed-filters";
+import {
+  DEFAULT_FEED_SORT_MODE,
+  FEED_SORT_LABELS,
+  FEED_SORT_MODES,
+  FEED_SORT_STORAGE_KEY,
+  sanitizeFeedSortMode,
+  type FeedSortMode,
+} from "../../src/services/feed-sort";
 import { isDemoApp } from "../../src/services/app-env";
+import { subscribeToExpoGoAlertRefresh } from "../../src/services/expo-go-alerts";
 import { feedFiltersStorage } from "../../src/services/feed-filters-storage";
 import { syncFeedFiltersPreferences } from "../../src/services/push-installation";
+import { typography } from "../../src/theme/typography";
 
 // ── Helpers ─────────────────────────────────────────
 
@@ -77,6 +87,7 @@ export default function LicitacionesFeed() {
   const [rubros, setRubros] = useState<Rubro[]>([]);
   const [regions, setRegions] = useState<RegionOption[]>([]);
   const [filters, setFilters] = useState<FeedFilters>(DEFAULT_FEED_FILTERS);
+  const [sortMode, setSortMode] = useState<FeedSortMode>(DEFAULT_FEED_SORT_MODE);
   const [hydrated, setHydrated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -92,7 +103,7 @@ export default function LicitacionesFeed() {
 
     async function initializeFeed() {
       try {
-        const [rubrosResponse, regionsResponse, storedFilters] =
+        const [rubrosResponse, regionsResponse, storedFilters, storedSortMode] =
           await Promise.all([
             fetchRubros().catch((err) => {
               if (!demoApp) {
@@ -107,6 +118,7 @@ export default function LicitacionesFeed() {
               return { data: [] as RegionOption[] };
             }),
             feedFiltersStorage.getItem(FEED_FILTERS_STORAGE_KEY),
+            feedFiltersStorage.getItem(FEED_SORT_STORAGE_KEY),
           ]);
 
         if (cancelled) return;
@@ -117,6 +129,10 @@ export default function LicitacionesFeed() {
         if (storedFilters) {
           const parsed = JSON.parse(storedFilters) as unknown;
           setFilters(sanitizeFeedFilters(parsed));
+        }
+
+        if (storedSortMode) {
+          setSortMode(sanitizeFeedSortMode(storedSortMode));
         }
       } catch (err) {
         if (!demoApp) {
@@ -145,6 +161,14 @@ export default function LicitacionesFeed() {
     ).catch((err) => console.error("[feed] Error persistiendo filtros:", err));
   }, [filters, hydrated]);
 
+  useEffect(() => {
+    if (!hydrated) return;
+
+    void feedFiltersStorage.setItem(FEED_SORT_STORAGE_KEY, sortMode).catch((err) =>
+      console.error("[feed] Error persistiendo orden:", err)
+    );
+  }, [hydrated, sortMode]);
+
   const loadLicitaciones = useCallback(
     async (
       options: {
@@ -172,6 +196,7 @@ export default function LicitacionesFeed() {
           limit: 20,
           windowDays: HOT_WINDOW_DAYS,
           filters,
+          sortMode,
         });
 
         if (requestSequence !== requestSequenceRef.current) {
@@ -207,13 +232,21 @@ export default function LicitacionesFeed() {
         }
       }
     },
-    [filters, hydrated, loadingMore]
+    [filters, hydrated, loadingMore, sortMode]
   );
 
   useEffect(() => {
     if (!hydrated) return;
     loadLicitaciones();
   }, [loadLicitaciones, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    return subscribeToExpoGoAlertRefresh(() => {
+      void loadLicitaciones({ cursor: null, append: false, isRefresh: false });
+    });
+  }, [hydrated, loadLicitaciones]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -244,6 +277,10 @@ export default function LicitacionesFeed() {
 
   const clearFilters = useCallback(() => {
     setFilters(DEFAULT_FEED_FILTERS);
+  }, []);
+
+  const updateSortMode = useCallback((nextSortMode: FeedSortMode) => {
+    setSortMode(nextSortMode);
   }, []);
 
   // ── Card ────────────────────────────────────────
@@ -364,7 +401,9 @@ export default function LicitacionesFeed() {
           {activeFilters ? (
             <Text style={styles.filtersSubtitle}>Filtros activos</Text>
           ) : (
-            <Text style={styles.filtersSubtitle}>Mostrando todas las licitaciones</Text>
+            <Text style={styles.filtersSubtitle}>
+              Mostrando {FEED_SORT_LABELS[sortMode].toLowerCase()}
+            </Text>
           )}
         </View>
         {activeFilters ? (
@@ -377,6 +416,36 @@ export default function LicitacionesFeed() {
           </TouchableOpacity>
         ) : null}
       </View>
+
+      <View style={styles.sortHeader}>
+        <Text style={styles.sortLabel}>Ordenar por</Text>
+        <Text style={styles.sortValue}>{FEED_SORT_LABELS[sortMode]}</Text>
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterScroll}
+        contentContainerStyle={styles.filterScrollContent}
+      >
+        {FEED_SORT_MODES.map((mode) => (
+          <TouchableOpacity
+            key={mode}
+            accessibilityRole="button"
+            style={[styles.chip, sortMode === mode && styles.chipActive]}
+            onPress={() => updateSortMode(mode)}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                sortMode === mode && styles.chipTextActive,
+              ]}
+            >
+              {FEED_SORT_LABELS[mode]}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
 
       <ScrollView
         horizontal
@@ -603,6 +672,11 @@ export default function LicitacionesFeed() {
                   ? "Estamos preparando licitaciones representativas para mostrarte."
                   : "Aún no hay licitaciones. El worker está buscando..."}
             </Text>
+            <Text style={styles.emptyAccent}>
+              {activeFilters
+                ? "Probá abrir un poco el rango para encontrar oportunidades."
+                : "Cuando aparezcan, las primeras van a destacar de verdad."}
+            </Text>
             {activeFilters ? (
               <TouchableOpacity
                 style={styles.retryButton}
@@ -642,14 +716,29 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   filtersTitle: {
-    fontSize: 15,
-    fontWeight: "700",
+    ...typography.cardTitle,
     color: colors.textPrimary,
   },
   filtersSubtitle: {
     marginTop: 2,
-    fontSize: 12,
+    ...typography.cardMeta,
     color: colors.textSecondary,
+  },
+  sortHeader: {
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  sortLabel: {
+    ...typography.sectionLabel,
+    color: colors.textSecondary,
+    textTransform: "uppercase",
+  },
+  sortValue: {
+    ...typography.cardMeta,
+    color: colors.textMuted,
   },
   clearButton: {
     paddingHorizontal: 12,
@@ -659,8 +748,7 @@ const styles = StyleSheet.create({
   },
   clearButtonText: {
     color: colors.primary,
-    fontWeight: "600",
-    fontSize: 12,
+    ...typography.buttonLabel,
   },
   filterScrollContent: {
     paddingHorizontal: 16,
@@ -679,13 +767,12 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   chipText: {
-    fontSize: 13,
+    ...typography.body,
     color: colors.textSecondary,
-    fontWeight: "500",
   },
   chipTextActive: {
     color: colors.primary,
-    fontWeight: "600",
+    fontFamily: typography.bodyStrong.fontFamily,
   },
   list: {
     padding: 16,
@@ -728,8 +815,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   codeBadgeText: {
-    fontSize: 12,
-    fontWeight: "600",
+    ...typography.cardCode,
     color: colors.primary,
   },
   timeRow: {
@@ -738,16 +824,14 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   timeText: {
-    fontSize: 11,
+    ...typography.meta,
     color: colors.textMuted,
   },
 
   // Title
   title: {
-    fontSize: 15,
-    fontWeight: "600",
+    ...typography.cardTitle,
     color: colors.textPrimary,
-    lineHeight: 21,
     marginBottom: 6,
   },
   titleCerrada: {
@@ -762,7 +846,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   entityText: {
-    fontSize: 13,
+    ...typography.cardSubtitle,
     color: colors.textSecondary,
     flex: 1,
   },
@@ -782,12 +866,11 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   monto: {
-    fontSize: 16,
-    fontWeight: "700",
+    ...typography.detailMetric,
     color: colors.textPrimary,
   },
   montoEmpty: {
-    fontSize: 13,
+    ...typography.cardSubtitle,
     color: colors.textMuted,
   },
   cerradaBadge: {
@@ -797,25 +880,24 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   cerradaBadgeText: {
-    fontSize: 10,
-    fontWeight: "700",
+    ...typography.tabLabel,
+    fontFamily: typography.bodyStrong.fontFamily,
     color: colors.error,
   },
 
   // States
   loadingText: {
     marginTop: 12,
-    fontSize: 14,
+    ...typography.body,
     color: colors.textSecondary,
   },
   errorTitle: {
-    fontSize: 16,
-    fontWeight: "600",
+    ...typography.cardTitle,
     color: colors.textPrimary,
     marginTop: 12,
   },
   errorText: {
-    fontSize: 13,
+    ...typography.cardSubtitle,
     color: colors.textSecondary,
     textAlign: "center",
     marginTop: 4,
@@ -829,13 +911,19 @@ const styles = StyleSheet.create({
   },
   retryText: {
     color: colors.textOnPrimary,
-    fontWeight: "600",
+    ...typography.buttonLabel,
   },
   emptyText: {
-    fontSize: 14,
+    ...typography.body,
     color: colors.textMuted,
     textAlign: "center",
     marginTop: 12,
+  },
+  emptyAccent: {
+    ...typography.emptyStateAccent,
+    color: colors.textSecondary,
+    textAlign: "center",
+    marginTop: 8,
   },
   footer: {
     paddingVertical: 16,
@@ -843,7 +931,7 @@ const styles = StyleSheet.create({
   endText: {
     textAlign: "center",
     color: colors.textMuted,
-    fontSize: 13,
+    ...typography.cardMeta,
     paddingVertical: 16,
   },
 });

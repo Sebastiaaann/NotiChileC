@@ -11,6 +11,7 @@ import {
 import { useLocalSearchParams, Stack, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../src/theme/colors";
+import { typography } from "../../src/theme/typography";
 import { fetchLicitacion, type Licitacion } from "../../src/services/api";
 import { isDemoApp } from "../../src/services/app-env";
 
@@ -136,6 +137,11 @@ export default function LicitacionDetail() {
           headerStyle: { backgroundColor: colors.surface },
           headerTintColor: colors.textPrimary,
           headerShadowVisible: false,
+          headerTitleStyle: {
+            fontFamily: typography.navTitle.fontFamily,
+            fontSize: typography.navTitle.fontSize,
+            fontWeight: "600",
+          },
         }}
       />
       <View style={styles.container}>
@@ -280,7 +286,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   errorText: {
-    fontSize: 14,
+    ...typography.body,
     color: colors.textSecondary,
     textAlign: "center",
     marginTop: 12,
@@ -294,7 +300,7 @@ const styles = StyleSheet.create({
   },
   backButtonText: {
     color: colors.textOnPrimary,
-    fontWeight: "600",
+    ...typography.buttonLabel,
   },
 
   // Code badge
@@ -307,21 +313,18 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   codeBadgeText: {
-    fontSize: 14,
-    fontWeight: "700",
+    ...typography.cardCode,
     color: colors.primary,
   },
 
   // Title
   title: {
-    fontSize: 24,
-    fontWeight: "700",
+    ...typography.detailTitle,
     color: colors.textPrimary,
-    lineHeight: 32,
     marginBottom: 4,
   },
   ago: {
-    fontSize: 13,
+    ...typography.cardMeta,
     color: colors.textMuted,
     marginBottom: 24,
   },
@@ -347,18 +350,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   infoLabel: {
-    fontSize: 13,
+    ...typography.cardMeta,
     color: colors.textSecondary,
     marginBottom: 2,
   },
   infoValue: {
-    fontSize: 15,
-    fontWeight: "500",
+    ...typography.bodyStrong,
     color: colors.textPrimary,
   },
   montoValue: {
-    fontSize: 20,
-    fontWeight: "700",
+    ...typography.detailMetric,
     color: colors.success,
   },
 
@@ -378,13 +379,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
   },
   dateLabel: {
-    fontSize: 12,
+    ...typography.cardMeta,
     color: colors.textSecondary,
     marginBottom: 4,
   },
   dateValue: {
-    fontSize: 13,
-    fontWeight: "500",
+    ...typography.bodyStrong,
     color: colors.textPrimary,
   },
 
@@ -412,7 +412,6 @@ const styles = StyleSheet.create({
   },
   actionButtonText: {
     color: colors.textOnPrimary,
-    fontSize: 16,
-    fontWeight: "600",
+    ...typography.buttonLabel,
   },
 });

@@ -1,21 +1,19 @@
 import { Router } from "express";
-import { query } from "../db";
+import { asc } from "drizzle-orm";
+import { db } from "../db";
+import { rubrosChilecompra } from "../db/schema/rubros-chilecompra";
 import { apiLogger } from "../observability/logger";
 import { captureException } from "../observability/sentry";
 
 const router = Router();
 
-export interface Rubro extends Record<string, unknown> {
-  code: string;
-  name: string;
-  parent_code: string | null;
-}
-
 router.get("/", async (req, res) => {
   try {
-    const rows = await query<Rubro>(
-      `SELECT code, name, parent_code FROM rubros_chilecompra ORDER BY code ASC`
-    );
+    const rows = await db
+      .select()
+      .from(rubrosChilecompra)
+      .orderBy(asc(rubrosChilecompra.code));
+
     res.json({
       data: rows.map(r => ({
         code: r.code,

@@ -1,5 +1,9 @@
 import { Router, type Request, type Response } from "express";
-import { query } from "../db";
+import { eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
+import { db } from "../db";
+import { deviceTokens } from "../db/schema/device-tokens";
+import { deviceInstallations } from "../db/schema/device-installations";
 import { apiLogger } from "../observability/logger";
 import { captureException } from "../observability/sentry";
 import { registerLegacyDeviceFromToken } from "./installations";
@@ -66,24 +70,24 @@ router.delete("/unregister", async (req: Request, res: Response) => {
       return;
     }
 
-    await query(
-      `UPDATE device_tokens
-       SET active = FALSE,
-           last_seen_at = NOW()
-       WHERE expo_push_token = $1`,
-      [expoPushToken]
-    );
+    await db
+      .update(deviceTokens)
+      .set({
+        active: false,
+        last_seen_at: sql`NOW()`,
+      })
+      .where(eq(deviceTokens.expo_push_token, expoPushToken));
 
-    await query(
-      `UPDATE device_installations
-       SET active = FALSE,
-           invalidated_at = NOW(),
-           invalid_reason = 'legacy-unregister',
-           last_seen_at = NOW(),
-           updated_at = NOW()
-       WHERE push_token = $1`,
-      [expoPushToken]
-    );
+    await db
+      .update(deviceInstallations)
+      .set({
+        active: false,
+        invalidated_at: sql`NOW()`,
+        invalid_reason: "legacy-unregister",
+        last_seen_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      })
+      .where(eq(deviceInstallations.push_token, expoPushToken));
 
     res.json({ ok: true });
   } catch (error) {

@@ -1,6 +1,7 @@
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../../src/theme/colors";
+import { typography } from "../../src/theme/typography";
 
 export default function TabLayout() {
   return (
@@ -16,8 +17,7 @@ export default function TabLayout() {
           paddingTop: 8,
         },
         tabBarLabelStyle: {
-          fontSize: 10,
-          fontWeight: "500",
+          ...typography.tabLabel,
         },
         headerStyle: {
           backgroundColor: colors.surface,
@@ -25,8 +25,7 @@ export default function TabLayout() {
         headerTintColor: colors.textPrimary,
         headerShadowVisible: false,
         headerTitleStyle: {
-          fontWeight: "700",
-          fontSize: 18,
+          ...typography.navTitle,
         },
       }}
     >

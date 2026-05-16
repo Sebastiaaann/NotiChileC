@@ -5,6 +5,7 @@ import express, {
   type Response,
 } from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import { checkDatabaseReady, getPoolStats, query } from "./db";
 import {
   renderMetrics,
@@ -20,6 +21,7 @@ import devicesRouter from "./routes/devices";
 import installationsRouter from "./routes/installations";
 import licitacionesRouter from "./routes/licitaciones";
 import rubrosRouter from "./routes/rubros";
+import authRouter from "./routes/auth";
 
 interface CountRow extends Record<string, unknown> {
   status: string;
@@ -81,12 +83,18 @@ function requestLoggingMiddleware(req: Request, res: Response, next: NextFunctio
   next();
 }
 
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
+
 export function createApp() {
   const app = express();
 
   app.disable("x-powered-by");
-  app.use(cors());
+  app.use(cors({
+    origin: CORS_ORIGIN,
+    credentials: true,
+  }));
   app.use(express.json({ limit: "1mb" }));
+  app.use(cookieParser());
   app.use(requestLoggingMiddleware);
 
   app.get("/api/health/live", (_req, res) => {
@@ -152,6 +160,7 @@ export function createApp() {
   app.use("/api/installations", installationsRouter);
   app.use("/api/devices", devicesRouter);
   app.use("/api/licitaciones", licitacionesRouter);
+  app.use("/api/auth", authRouter);
   app.use("/api/rubros", rubrosRouter);
 
   app.use(
