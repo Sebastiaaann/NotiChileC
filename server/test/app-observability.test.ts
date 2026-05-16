@@ -18,9 +18,19 @@ vi.mock("../src/db", () => ({
   getPoolStats: getPoolStatsMock,
   checkDatabaseReady: checkDatabaseReadyMock,
   db: {
-    select: vi.fn(() => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve([]), then: (fn: any) => Promise.resolve([]).then(fn) }) }) })),
+    select: vi.fn(() => ({
+      from: () => ({
+        where: () => ({
+          limit: () => Promise.resolve([]),
+          then: (fn: any) => Promise.resolve([]).then(fn),
+          groupBy: () => Promise.resolve([]),
+        }),
+        groupBy: () => Promise.resolve([]),
+      }),
+    })),
     insert: vi.fn(() => ({ values: () => ({ returning: () => Promise.resolve([{}]) }) })),
     update: vi.fn(() => ({ set: () => ({ where: () => Promise.resolve(undefined) }) })),
+    execute: vi.fn().mockResolvedValue({ rows: [] }),
   },
 } as any));
 

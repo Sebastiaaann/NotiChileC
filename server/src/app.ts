@@ -6,7 +6,9 @@ import express, {
 } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import { checkDatabaseReady, getPoolStats, query } from "./db";
+import { checkDatabaseReady, getPoolStats, db } from "./db";
+import { notificationDeliveries, archiveExports } from "./db/schema";
+import { count } from "drizzle-orm";
 import {
   renderMetrics,
   updateArchiveManifestCounts,
@@ -23,17 +25,14 @@ import licitacionesRouter from "./routes/licitaciones";
 import rubrosRouter from "./routes/rubros";
 import authRouter from "./routes/auth";
 
-interface CountRow extends Record<string, unknown> {
-  status: string;
-  count: number | string;
-}
-
 async function loadQueueCounts(): Promise<{ status: string; count: number }[]> {
-  const rows = await query<CountRow>(
-    `SELECT status, COUNT(*)::int AS count
-     FROM notification_deliveries
-     GROUP BY status`
-  );
+  const rows = await db
+    .select({
+      status: notificationDeliveries.status,
+      count: count(),
+    })
+    .from(notificationDeliveries)
+    .groupBy(notificationDeliveries.status);
 
   return rows.map((row) => ({
     status: row.status,
@@ -43,11 +42,13 @@ async function loadQueueCounts(): Promise<{ status: string; count: number }[]> {
 
 async function loadArchiveManifestCounts(): Promise<{ status: string; count: number }[]> {
   try {
-    const rows = await query<CountRow>(
-      `SELECT status, COUNT(*)::int AS count
-       FROM archive_exports
-       GROUP BY status`
-    );
+    const rows = await db
+      .select({
+        status: archiveExports.status,
+        count: count(),
+      })
+      .from(archiveExports)
+      .groupBy(archiveExports.status);
 
     return rows.map((row) => ({
       status: row.status,

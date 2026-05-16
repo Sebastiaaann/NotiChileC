@@ -5,7 +5,11 @@ import {
   type LicitacionRecord,
 } from "./chilecompra";
 import { scrapeLicitaciones, scrapedToRecord } from "./scraper";
-import { query, queryResult } from "./db";
+import { query, queryResult, db as drizzleDb } from "./db";
+import { licitacionRegistry } from "./db/schema";
+import { sql } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type * as schema from "./db/schema/index";
 import { createExpoPushProvider } from "./push";
 import type {
   PushNotificationInput,
@@ -74,6 +78,7 @@ export interface WorkerResult {
 }
 
 interface WorkerDependencies {
+  db: NodePgDatabase<typeof schema>;
   query: typeof query;
   queryResult: typeof queryResult;
   pushProvider: PushProvider;
@@ -274,6 +279,7 @@ function isInstallationAllowed(row: DeviceInstallationRow): boolean {
 
 function createDefaultDependencies(): WorkerDependencies {
   return {
+    db: drizzleDb as unknown as NodePgDatabase<typeof schema>,
     query,
     queryResult,
     pushProvider: DEFAULT_PUSH_PROVIDER,
@@ -294,39 +300,36 @@ async function ensureLicitacionPartitions(
 async function archiveOldLicitaciones(
   deps: WorkerDependencies
 ): Promise<number> {
-  const rows = await deps.query<{ archived_count: string | number }>(
-    `SELECT archive_old_licitaciones($1) AS archived_count`,
-    [HOT_RETENTION_MONTHS]
+  const result = await deps.db.execute<{ archived_count: string | number }>(
+    sql`SELECT archive_old_licitaciones(${HOT_RETENTION_MONTHS}) AS archived_count`
   );
 
-  return Number(rows[0]?.archived_count ?? 0);
+  return Number(result.rows[0]?.archived_count ?? 0);
 }
 
 async function archiveOldDeliveries(
   deps: WorkerDependencies
 ): Promise<number> {
-  const rows = await deps.query<{ archived_count: string | number }>(
-    `SELECT archive_old_notification_deliveries($1) AS archived_count`,
-    [DELIVERY_RETENTION_DAYS]
+  const result = await deps.db.execute<{ archived_count: string | number }>(
+    sql`SELECT archive_old_notification_deliveries(${DELIVERY_RETENTION_DAYS}) AS archived_count`
   );
 
-  return Number(rows[0]?.archived_count ?? 0);
+  return Number(result.rows[0]?.archived_count ?? 0);
 }
 async function createNotificationEvent(
   deps: WorkerDependencies,
   record: LicitacionRecord
 ): Promise<number> {
-  const rows = await deps.query<NotificationEventRow>(
-    `
+  const result = await deps.db.execute<NotificationEventRow>(
+    sql`
       INSERT INTO notification_events (type, licitacion_id, created_at)
-      VALUES ($1, $2, NOW())
+      VALUES (${EVENT_TYPE_NEW_LICITACION}, ${record.id}, NOW())
       ON CONFLICT (type, licitacion_id) DO UPDATE SET type = EXCLUDED.type
       RETURNING id
-    `,
-    [EVENT_TYPE_NEW_LICITACION, record.id]
+    `
   );
 
-  const eventId = rows[0]?.id;
+  const eventId = result.rows[0]?.id;
   if (!eventId) {
     throw new Error(
       `No se pudo crear o recuperar notification_event para ${record.codigo_externo}`
@@ -342,10 +345,10 @@ async function loadExistingCodigos(
 ): Promise<Set<string>> {
   if (codigos.length === 0) return new Set();
 
-  const rows = await deps.query<{ codigo_externo: string }>(
-    `SELECT codigo_externo FROM licitacion_registry WHERE codigo_externo = ANY($1::text[])`,
-    [codigos]
-  );
+  const rows = await deps.db
+    .select({ codigo_externo: licitacionRegistry.codigo_externo })
+    .from(licitacionRegistry)
+    .where(sql`${licitacionRegistry.codigo_externo} = ANY(${codigos}::text[])`);
 
   return new Set(rows.map((row) => row.codigo_externo));
 }
@@ -576,8 +579,8 @@ async function lockDispatchDeliveries(
   workerId: string,
   limit: number
 ): Promise<DispatchDeliveryRow[]> {
-  return deps.query<DispatchDeliveryRow>(
-    `
+  const result = await deps.db.execute<DispatchDeliveryRow>(
+    sql`
       WITH due AS (
         SELECT nd.id
         FROM notification_deliveries nd
@@ -586,13 +589,13 @@ async function lockDispatchDeliveries(
           AND COALESCE(nd.next_attempt_at, nd.created_at) <= NOW()
           AND nd.locked_at IS NULL
         ORDER BY nd.created_at ASC, nd.id ASC
-        LIMIT $1
+        LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
       ),
       locked AS (
         UPDATE notification_deliveries nd
         SET locked_at = NOW(),
-            locked_by = $2,
+            locked_by = ${workerId},
             updated_at = NOW()
         FROM due
         WHERE nd.id = due.id
@@ -641,9 +644,9 @@ async function lockDispatchDeliveries(
         ON ne.id = locked.notification_event_id
       JOIN licitaciones l
         ON l.id = ne.licitacion_id
-    `,
-    [limit, workerId]
+    `
   );
+  return result.rows;
 }
 
 function buildPushInput(delivery: DispatchDeliveryRow): PushNotificationInput {
@@ -671,8 +674,8 @@ async function lockReceiptDeliveries(
   workerId: string,
   limit: number
 ): Promise<ReceiptDeliveryRow[]> {
-  return deps.query<ReceiptDeliveryRow>(
-    `
+  const result = await deps.db.execute<ReceiptDeliveryRow>(
+    sql`
       WITH due AS (
         SELECT nd.id
         FROM notification_deliveries nd
@@ -682,13 +685,13 @@ async function lockReceiptDeliveries(
           AND nd.provider_ticket_id IS NOT NULL
           AND nd.locked_at IS NULL
         ORDER BY nd.last_attempt_at ASC NULLS FIRST, nd.id ASC
-        LIMIT $1
+        LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
       ),
       locked AS (
         UPDATE notification_deliveries nd
         SET locked_at = NOW(),
-            locked_by = $2,
+            locked_by = ${workerId},
             updated_at = NOW()
         FROM due
         WHERE nd.id = due.id
@@ -698,9 +701,9 @@ async function lockReceiptDeliveries(
                   nd.attempt_count
       )
       SELECT * FROM locked
-    `,
-    [limit, workerId]
+    `
   );
+  return result.rows;
 }
 
 async function applyReceiptOutcome(
@@ -1201,8 +1204,7 @@ export function createRunArchiveExportCycle(
   return async function runArchiveExportCycle(): Promise<WorkerResult> {
     const result = emptyWorkerResult();
     const summary = await runArchiveExportJob({
-      query: deps.query,
-      queryResult: deps.queryResult,
+      db: deps.db,
       now: deps.now,
     });
 
@@ -1239,12 +1241,11 @@ async function startRun(
   deps: WorkerDependencies,
   workerName: string
 ): Promise<number | undefined> {
-  const rows = await deps.query<{ id: number }>(
-    `INSERT INTO worker_runs (started_at, worker_name) VALUES ($1, $2) RETURNING id`,
-    [deps.now(), workerName]
+  const result = await deps.db.execute<{ id: number }>(
+    sql`INSERT INTO worker_runs (started_at, worker_name) VALUES (${deps.now()}, ${workerName}) RETURNING id`
   );
 
-  return rows[0]?.id;
+  return result.rows[0]?.id;
 }
 
 async function finishRun(

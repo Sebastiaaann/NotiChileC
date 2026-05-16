@@ -9,6 +9,8 @@ export { notificationDeliveries } from "./notification-deliveries";
 export { workerRuns } from "./worker-runs";
 export { archiveExports } from "./archive-exports";
 export { rubrosChilecompra } from "./rubros-chilecompra";
+export { archiveLicitaciones, archiveSchema } from "./archive-licitaciones";
+export { archiveNotificationDeliveries } from "./archive-deliveries";
 export {
   notificationPreferencesRelations,
   notificationDeliveriesRelations,

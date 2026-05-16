@@ -22,9 +22,37 @@ const {
   pushFetchReceiptsMock: vi.fn(),
 }));
 
+const drizzleToQueryConfig = {
+  casing: { getColumnCasing: (col: any) => col.name },
+  escapeName: (name: string) => `"${name}"`,
+  escapeParam: (num: number) => `$${num + 1}`,
+  escapeString: (str: string) => `'${str.replace(/'/g, "''")}'`,
+  prepareTyping: () => "none" as const,
+};
+function drizzleSqlText(sql: any): string {
+  if (typeof sql === "string") return sql;
+  if (sql?.SQL) return sql.SQL;
+  if (sql?.toQuery) return sql.toQuery(drizzleToQueryConfig).sql;
+  return String(sql);
+}
+
 vi.mock("../src/db", () => ({
   query: queryMock,
   queryResult: queryResultMock,
+  db: {
+    select: vi.fn(() => ({ from: () => ({ where: () => Promise.resolve([]) }) })),
+    insert: vi.fn(() => ({ values: () => ({ returning: () => Promise.resolve([{}]) }) })),
+    update: vi.fn(() => ({ set: () => ({ where: () => Promise.resolve(undefined) }) })),
+    execute: vi.fn(async (sql: any) => {
+      const sqlText = drizzleSqlText(sql);
+      const result = await queryResultMock(sqlText);
+      if (result && typeof result === "object" && "rows" in result) {
+        return result;
+      }
+      const rows = await queryMock(sqlText).catch(() => []);
+      return { rows: Array.isArray(rows) ? rows : [], rowCount: Array.isArray(rows) ? rows.length : 0, command: "", oid: 0, fields: [] };
+    }),
+  },
 }));
 
 vi.mock("../src/scraper", () => ({
@@ -121,10 +149,11 @@ describe("workers", () => {
       source_rank: null,
     });
 
+    queryResultMock.mockResolvedValue({ rows: [{ id: 77 }], rowCount: 1, command: "", oid: 0, fields: [] });
+
     queryMock.mockImplementation(async (sql: string) => {
       if (sql.includes("ensure_licitaciones_monthly_partitions")) return [];
       if (sql.includes("SELECT codigo_externo FROM licitacion_registry")) return [];
-      if (sql.includes("INSERT INTO notification_events")) return [{ id: 77 }];
       if (sql.includes("FROM device_installations di") && !sql.includes("JOIN notification_events")) {
         return [
           {
@@ -171,46 +200,47 @@ describe("workers", () => {
   });
 
   it("dispatch toma deliveries pendientes con SKIP LOCKED y actualiza envíos", async () => {
+    queryResultMock.mockResolvedValue({
+      rows: [
+        {
+          delivery_id: 10,
+          notification_event_id: 77,
+          installation_id: "inst-eligible",
+          provider: "expo",
+          status: "pending",
+          provider_ticket_id: null,
+          provider_receipt_id: null,
+          attempt_count: 0,
+          push_token: "ExponentPushToken[eligible-token]",
+          platform: "ios",
+          environment: "development",
+          app_version: "1.0.0",
+          push_capable: true,
+          permission_status: "granted",
+          active: true,
+          invalidated_at: null,
+          invalid_reason: null,
+          last_seen_at: fixedNow.toISOString(),
+          enabled: true,
+          rubro: "45000000",
+          tipo: "LE",
+          region: "RM",
+          monto_min: 100000000,
+          monto_max: null,
+          licitacion_id: "123-LE1",
+          licitacion_nombre: "Nueva licitación",
+          licitacion_codigo_externo: "123-LE1",
+          licitacion_tipo: "LE",
+          licitacion_region: "RM",
+          licitacion_rubro_code: "45000000",
+          licitacion_monto_estimado: 120000000,
+          licitacion_monto_label: null,
+          licitacion_moneda: "CLP",
+        },
+      ],
+    });
+
     queryMock.mockImplementation(async (sql: string) => {
-      if (sql.includes("JOIN notification_events") && sql.includes("FOR UPDATE SKIP LOCKED")) {
-        return [
-          {
-            delivery_id: 10,
-            notification_event_id: 77,
-            installation_id: "inst-eligible",
-            provider: "expo",
-            status: "pending",
-            provider_ticket_id: null,
-            provider_receipt_id: null,
-            attempt_count: 0,
-            push_token: "ExponentPushToken[eligible-token]",
-            platform: "ios",
-            environment: "development",
-            app_version: "1.0.0",
-            push_capable: true,
-            permission_status: "granted",
-            active: true,
-            invalidated_at: null,
-            invalid_reason: null,
-            last_seen_at: fixedNow.toISOString(),
-            enabled: true,
-            rubro: "45000000",
-            tipo: "LE",
-            region: "RM",
-            monto_min: 100000000,
-            monto_max: null,
-            licitacion_id: "123-LE1",
-            licitacion_nombre: "Nueva licitación",
-            licitacion_codigo_externo: "123-LE1",
-            licitacion_tipo: "LE",
-            licitacion_region: "RM",
-            licitacion_rubro_code: "45000000",
-            licitacion_monto_estimado: 120000000,
-            licitacion_monto_label: null,
-            licitacion_moneda: "CLP",
-          },
-        ];
-      }
       if (sql.includes("UPDATE notification_deliveries SET")) return [];
       if (sql.includes("UPDATE licitaciones SET notificada = TRUE")) return [];
       return [];
@@ -243,17 +273,18 @@ describe("workers", () => {
   });
 
   it("receipt invalida instalaciones cuando el proveedor devuelve DeviceNotRegistered", async () => {
+    queryResultMock.mockResolvedValue({
+      rows: [
+        {
+          delivery_id: 10,
+          installation_id: "inst-invalid",
+          provider_ticket_id: "ticket-invalid",
+          attempt_count: 1,
+        },
+      ],
+    });
+
     queryMock.mockImplementation(async (sql: string) => {
-      if (sql.includes("provider_ticket_id") && sql.includes("FOR UPDATE SKIP LOCKED")) {
-        return [
-          {
-            delivery_id: 10,
-            installation_id: "inst-invalid",
-            provider_ticket_id: "ticket-invalid",
-            attempt_count: 1,
-          },
-        ];
-      }
       if (sql.includes("UPDATE notification_deliveries SET")) return [];
       if (sql.includes("UPDATE device_installations SET")) return [];
       return [];
@@ -284,10 +315,12 @@ describe("workers", () => {
   });
 
   it("cleanup archiva datos operativos viejos", async () => {
+    queryResultMock
+      .mockResolvedValueOnce({ rows: [{ archived_count: 4 }], rowCount: 1, command: "", oid: 0, fields: [] })
+      .mockResolvedValueOnce({ rows: [{ archived_count: 9 }], rowCount: 1, command: "", oid: 0, fields: [] });
+
     queryMock.mockImplementation(async (sql: string) => {
       if (sql.includes("ensure_licitaciones_monthly_partitions")) return [];
-      if (sql.includes("archive_old_licitaciones")) return [{ archived_count: 4 }];
-      if (sql.includes("archive_old_notification_deliveries")) return [{ archived_count: 9 }];
       return [];
     });
 

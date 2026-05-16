@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 import { Router, type Request, type Response } from "express";
-import { query, queryOne } from "../db";
+import { query, queryOne, db } from "../db";
+import { licitaciones } from "../db/schema";
+import { eq, sql } from "drizzle-orm";
 import {
   DEFAULT_FEED_SORT_MODE,
   isFeedSortMode,
@@ -549,7 +551,7 @@ router.get("/regions", async (req: Request, res: Response) => {
     const windowDays = readWindowDays(req);
     const windowStart = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
 
-    const rows = await query<{ region: string }>(
+    const regionRows = await query<{ region: string } & Record<string, unknown>>(
       `SELECT DISTINCT region
        FROM licitaciones
        WHERE COALESCE(fecha_publicacion, created_at) >= $1
@@ -560,7 +562,7 @@ router.get("/regions", async (req: Request, res: Response) => {
     );
 
     res.json({
-      data: rows.map((row) => ({ name: row.region })),
+      data: regionRows.map((row) => ({ name: row.region })),
     });
   } catch (error) {
     captureException(error, { route: "/api/licitaciones/regions", method: "GET" });
@@ -581,16 +583,16 @@ router.get("/:id", async (req: Request, res: Response) => {
   try {
     await ensureRuntimeSchema();
 
-    const row = await queryOne<LicitacionRow>(
-      `SELECT id, codigo_externo, nombre, organismo_nombre, tipo,
-              monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
-              estado, url, region, categoria, source_rank, created_at
-       FROM licitaciones
-       WHERE id = $1 OR codigo_externo = $1
-       ORDER BY created_at DESC, id DESC
-       LIMIT 1`,
-      [req.params.id]
-    );
+    const rows = await db
+      .select()
+      .from(licitaciones)
+      .where(
+        sql`${licitaciones.id} = ${req.params.id} OR ${licitaciones.codigo_externo} = ${req.params.id}`
+      )
+      .orderBy(sql`created_at DESC, id DESC`)
+      .limit(1);
+
+    const row = (rows[0] as unknown as LicitacionRow | undefined) ?? null;
 
     if (!row) {
       res.status(404).json({ error: "Licitación no encontrada" });

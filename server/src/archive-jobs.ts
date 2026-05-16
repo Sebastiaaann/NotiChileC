@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { ParquetReader, ParquetSchema, ParquetWriter } from "parquetjs-lite";
 import type { QueryResult } from "pg";
+import { sql, type SQL } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type * as schema from "./db/schema/index";
 import { createDirectPool } from "./db";
 import {
   buildArchiveObjectKey,
@@ -14,15 +17,8 @@ import {
   verifyArchiveObjectMetadata,
 } from "./archive-storage";
 
-type QueryFn = <T extends Record<string, unknown>>(
-  text: string,
-  params?: unknown[]
-) => Promise<T[]>;
-
-type QueryResultFn = <T extends Record<string, unknown>>(
-  text: string,
-  params?: unknown[]
-) => Promise<QueryResult<T>>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DbExec = (query: SQL, params?: unknown[]) => Promise<QueryResult<any>>;
 
 export type ArchiveEntity = "licitaciones" | "notification_deliveries";
 
@@ -170,9 +166,11 @@ async function writeParquet(
   return tempFile;
 }
 
-export async function findArchiveCandidates(query: QueryFn): Promise<ArchiveCandidate[]> {
-  const licitaciones = await query<ArchiveCandidate>(
-    `
+export async function findArchiveCandidates(
+  db: { execute: DbExec }
+): Promise<ArchiveCandidate[]> {
+  const licResult = await db.execute(
+    sql`
       SELECT
         'licitaciones'::text AS entity,
         TO_CHAR(date_trunc('month', created_at), 'YYYY-MM') AS partition_month,
@@ -185,8 +183,8 @@ export async function findArchiveCandidates(query: QueryFn): Promise<ArchiveCand
     `
   );
 
-  const deliveries = await query<ArchiveCandidate>(
-    `
+  const delResult = await db.execute(
+    sql`
       SELECT
         'notification_deliveries'::text AS entity,
         TO_CHAR(date_trunc('month', COALESCE(completed_at, created_at)), 'YYYY-MM') AS partition_month,
@@ -199,60 +197,59 @@ export async function findArchiveCandidates(query: QueryFn): Promise<ArchiveCand
     `
   );
 
-  return [...licitaciones, ...deliveries];
+  return [...licResult.rows, ...delResult.rows];
 }
 
 async function findVerifiedManifest(
-  query: QueryFn,
+  db: { execute: DbExec },
   entity: ArchiveEntity,
   partitionMonth: string
 ): Promise<ArchiveManifestRow | null> {
-  const rows = await query<ArchiveManifestRow>(
-    `
+  const result = await db.execute(
+    sql`
       SELECT *
       FROM archive_exports
-      WHERE entity = $1
-        AND partition_month = $2
+      WHERE entity = ${entity}
+        AND partition_month = ${partitionMonth}
         AND status IN ('verified', 'dropped')
       ORDER BY exported_at DESC
       LIMIT 1
-    `,
-    [entity, partitionMonth]
+    `
   );
 
-  return rows[0] ?? null;
+  return result.rows[0] ?? null;
 }
 
 async function loadArchiveRows(
-  query: QueryFn,
+  db: { execute: DbExec },
   entity: ArchiveEntity,
   partitionMonth: string
 ): Promise<Record<string, unknown>[]> {
   if (entity === "licitaciones") {
-    return query<Record<string, unknown>>(
-      `
+    const result = await db.execute(
+      sql`
         SELECT *
         FROM archive.licitaciones
-        WHERE TO_CHAR(date_trunc('month', created_at), 'YYYY-MM') = $1
+        WHERE TO_CHAR(date_trunc('month', created_at), 'YYYY-MM') = ${partitionMonth}
         ORDER BY created_at ASC, id ASC
-      `,
-      [partitionMonth]
+      `
     );
+    return result.rows;
   }
 
-  return query<Record<string, unknown>>(
-    `
+  const result = await db.execute(
+    sql`
       SELECT *
       FROM archive.notification_deliveries
-      WHERE TO_CHAR(date_trunc('month', COALESCE(completed_at, created_at)), 'YYYY-MM') = $1
+      WHERE TO_CHAR(date_trunc('month', COALESCE(completed_at, created_at)), 'YYYY-MM') = ${partitionMonth}
       ORDER BY COALESCE(completed_at, created_at) ASC, id ASC
-    `,
-    [partitionMonth]
+    `
   );
+  return result.rows;
 }
 
 async function upsertArchiveManifest(
-  queryResult: QueryResultFn,
+  db: { execute: DbExec },
   payload: {
     entity: ArchiveEntity;
     partitionMonth: string;
@@ -269,8 +266,8 @@ async function upsertArchiveManifest(
     droppedAt?: Date | null;
   }
 ): Promise<void> {
-  await queryResult(
-    `
+  await db.execute(
+    sql`
       INSERT INTO archive_exports (
         entity,
         partition_month,
@@ -286,12 +283,13 @@ async function upsertArchiveManifest(
         last_error,
         dropped_at
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8,
-        COALESCE($9, NOW()),
-        $10,
-        $11,
-        $12,
-        $13
+        ${payload.entity}, ${payload.partitionMonth}, ${payload.objectKey}, ${payload.rowCount},
+        ${payload.minCreatedAt}, ${payload.maxCreatedAt}, ${payload.checksum}, ${payload.status},
+        COALESCE(${payload.exportedAt ?? null}, NOW()),
+        ${payload.verifiedAt ?? null},
+        ${payload.dropEligibleAt ?? null},
+        ${payload.lastError ?? null},
+        ${payload.droppedAt ?? null}
       )
       ON CONFLICT (entity, partition_month) DO UPDATE SET
         object_key = EXCLUDED.object_key,
@@ -306,22 +304,7 @@ async function upsertArchiveManifest(
         last_error = EXCLUDED.last_error,
         dropped_at = EXCLUDED.dropped_at,
         updated_at = NOW()
-    `,
-    [
-      payload.entity,
-      payload.partitionMonth,
-      payload.objectKey,
-      payload.rowCount,
-      payload.minCreatedAt,
-      payload.maxCreatedAt,
-      payload.checksum,
-      payload.status,
-      payload.exportedAt ?? null,
-      payload.verifiedAt ?? null,
-      payload.dropEligibleAt ?? null,
-      payload.lastError ?? null,
-      payload.droppedAt ?? null,
-    ]
+    `
   );
 }
 
@@ -336,8 +319,7 @@ function buildObjectMetadata(entity: ArchiveEntity, partitionMonth: string, rowC
 
 export async function runArchiveExportCycle(
   deps: {
-    query: QueryFn;
-    queryResult: QueryResultFn;
+    db: { execute: DbExec };
     now?: () => Date;
   }
 ): Promise<ArchiveExportSummary> {
@@ -354,18 +336,18 @@ export async function runArchiveExportCycle(
     failed: 0,
   };
 
-  const candidates = await findArchiveCandidates(deps.query);
+  const candidates = await findArchiveCandidates(deps.db);
 
   for (const candidate of candidates) {
     const entity = candidate.entity;
     const partitionMonth = String(candidate.partition_month);
 
-    const existing = await findVerifiedManifest(deps.query, entity, partitionMonth);
+    const existing = await findVerifiedManifest(deps.db, entity, partitionMonth);
     if (existing) {
       continue;
     }
 
-    const rows = await loadArchiveRows(deps.query, entity, partitionMonth);
+    const rows = await loadArchiveRows(deps.db, entity, partitionMonth);
     const rowCount = rows.length;
     if (rowCount === 0) {
       continue;
@@ -385,7 +367,7 @@ export async function runArchiveExportCycle(
       await uploadArchiveObject(storageConfig, tempFile, objectKey, metadata);
       summary.exported += 1;
 
-      await upsertArchiveManifest(deps.queryResult, {
+      await upsertArchiveManifest(deps.db, {
         entity,
         partitionMonth,
         objectKey,
@@ -400,7 +382,7 @@ export async function runArchiveExportCycle(
       const verified = await verifyArchiveObjectMetadata(storageConfig, objectKey, metadata);
       if (!verified) {
         summary.failed += 1;
-        await upsertArchiveManifest(deps.queryResult, {
+        await upsertArchiveManifest(deps.db, {
           entity,
           partitionMonth,
           objectKey,
@@ -415,7 +397,7 @@ export async function runArchiveExportCycle(
       }
 
       summary.verified += 1;
-      await upsertArchiveManifest(deps.queryResult, {
+      await upsertArchiveManifest(deps.db, {
         entity,
         partitionMonth,
         objectKey,
@@ -429,7 +411,7 @@ export async function runArchiveExportCycle(
       });
     } catch (error) {
       summary.failed += 1;
-      await upsertArchiveManifest(deps.queryResult, {
+      await upsertArchiveManifest(deps.db, {
         entity,
         partitionMonth,
         objectKey,
@@ -445,8 +427,8 @@ export async function runArchiveExportCycle(
     }
   }
 
-  const dropCandidates = await deps.query<ArchiveManifestRow>(
-    `
+  const dropResult = await deps.db.execute(
+    sql`
       SELECT *
       FROM archive_exports
       WHERE status = 'verified'
@@ -455,28 +437,27 @@ export async function runArchiveExportCycle(
       ORDER BY entity, partition_month
     `
   );
+  const dropCandidates = dropResult.rows;
 
   for (const candidate of dropCandidates) {
     if (candidate.entity === "licitaciones") {
-      await deps.queryResult(
-        `
+      await deps.db.execute(
+        sql`
           DELETE FROM archive.licitaciones
-          WHERE TO_CHAR(date_trunc('month', created_at), 'YYYY-MM') = $1
-        `,
-        [candidate.partition_month]
+          WHERE TO_CHAR(date_trunc('month', created_at), 'YYYY-MM') = ${candidate.partition_month}
+        `
       );
     } else {
-      await deps.queryResult(
-        `
+      await deps.db.execute(
+        sql`
           DELETE FROM archive.notification_deliveries
-          WHERE TO_CHAR(date_trunc('month', COALESCE(completed_at, created_at)), 'YYYY-MM') = $1
-        `,
-        [candidate.partition_month]
+          WHERE TO_CHAR(date_trunc('month', COALESCE(completed_at, created_at)), 'YYYY-MM') = ${candidate.partition_month}
+        `
       );
     }
 
     summary.dropped += 1;
-    await upsertArchiveManifest(deps.queryResult, {
+    await upsertArchiveManifest(deps.db, {
       entity: candidate.entity,
       partitionMonth: candidate.partition_month,
       objectKey: candidate.object_key,
