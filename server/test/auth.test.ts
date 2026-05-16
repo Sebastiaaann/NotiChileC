@@ -2,10 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── Mocks ──────────────────────────────────────────────
 
-const { queryMock, queryOneMock, checkDatabaseReadyMock, getPoolStatsMock, dbSelectMock, dbInsertMock, dbUpdateMock } =
+const { checkDatabaseReadyMock, getPoolStatsMock, dbSelectMock, dbInsertMock, dbUpdateMock } =
   vi.hoisted(() => ({
-    queryMock: vi.fn(),
-    queryOneMock: vi.fn(),
     checkDatabaseReadyMock: vi.fn(),
     getPoolStatsMock: vi.fn(),
     dbSelectMock: vi.fn(),
@@ -25,8 +23,6 @@ vi.mock("../src/services/email", () => ({
 }));
 
 vi.mock("../src/db", () => ({
-  query: queryMock,
-  queryOne: queryOneMock,
   checkDatabaseReady: checkDatabaseReadyMock,
   getPoolStats: getPoolStatsMock,
   db: {

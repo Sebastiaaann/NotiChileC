@@ -1,6 +1,6 @@
 import "./load-demo-env";
 import { createExpoPushProvider } from "../src/push";
-import { closePool, query } from "../src/db";
+import { closePool, getPool } from "../src/db";
 import { workerLogger } from "../src/observability/logger";
 import type { PushNotificationInput } from "../src/push-provider";
 
@@ -13,7 +13,7 @@ async function main() {
   const provider = createExpoPushProvider();
   const targetInstallationId = process.env.DEMO_PUSH_INSTALLATION_ID?.trim();
 
-  const rows = await query<InstallationRow>(
+  const { rows } = await getPool().query<InstallationRow>(
     `SELECT installation_id, push_token
      FROM device_installations
      WHERE active = TRUE

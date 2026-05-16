@@ -1,5 +1,6 @@
-import { Pool, type PoolConfig, type QueryResult } from "pg";
+import { Pool, type PoolConfig } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
 import * as schema from "./db/schema/index";
 
 let pool: Pool | null = null;
@@ -82,29 +83,6 @@ export function createDirectPool(applicationName = "notichilec-direct"): Pool {
   return new Pool(buildPoolConfig(getDirectConnectionString(), applicationName));
 }
 
-export async function query<T extends Record<string, unknown>>(
-  text: string,
-  params: unknown[] = []
-): Promise<T[]> {
-  const result = await queryResult<T>(text, params);
-  return result.rows;
-}
-
-export async function queryResult<T extends Record<string, unknown>>(
-  text: string,
-  params: unknown[] = []
-): Promise<QueryResult<T>> {
-  return getPool().query<T>(text, params);
-}
-
-export async function queryOne<T extends Record<string, unknown>>(
-  text: string,
-  params: unknown[] = []
-): Promise<T | null> {
-  const rows = await query<T>(text, params);
-  return rows[0] ?? null;
-}
-
 export function getPoolStats(): PoolStats {
   const currentPool = getPool();
   return {
@@ -135,7 +113,7 @@ export async function checkDatabaseReady(timeoutMs = DEFAULT_READINESS_TIMEOUT_M
 
   try {
     await Promise.race([
-      queryOne<{ ok: number }>("SELECT 1 AS ok"),
+      db.execute(sql`SELECT 1 AS ok`),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("db_readiness_timeout")), timeoutMs)
       ),

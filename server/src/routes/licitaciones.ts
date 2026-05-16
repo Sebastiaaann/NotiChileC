@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { Router, type Request, type Response } from "express";
-import { query, queryOne, db } from "../db";
+import { getPool, db } from "../db";
 import { licitaciones } from "../db/schema";
 import { eq, sql } from "drizzle-orm";
 import {
@@ -497,7 +497,7 @@ router.get("/", async (req: Request, res: Response) => {
 
     params.push(limit + 1);
 
-    const rows = await query<LicitacionRow>(
+    const result = await getPool().query<LicitacionRow>(
       `SELECT id, codigo_externo, nombre, organismo_nombre, tipo,
               monto_estimado, monto_label, moneda, fecha_publicacion, fecha_cierre,
               estado, url, region, categoria, source_rank, created_at
@@ -507,6 +507,7 @@ router.get("/", async (req: Request, res: Response) => {
        LIMIT $${paramIndex}`,
       params
     );
+    const rows = result.rows;
 
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
@@ -551,7 +552,7 @@ router.get("/regions", async (req: Request, res: Response) => {
     const windowDays = readWindowDays(req);
     const windowStart = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
 
-    const regionRows = await query<{ region: string } & Record<string, unknown>>(
+    const regionResult = await getPool().query<{ region: string }>(
       `SELECT DISTINCT region
        FROM licitaciones
        WHERE COALESCE(fecha_publicacion, created_at) >= $1
@@ -560,6 +561,7 @@ router.get("/regions", async (req: Request, res: Response) => {
        ORDER BY region ASC`,
       [windowStart.toISOString()]
     );
+    const regionRows = regionResult.rows;
 
     res.json({
       data: regionRows.map((row) => ({ name: row.region })),

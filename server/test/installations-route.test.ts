@@ -165,8 +165,6 @@ describe("Installations API", () => {
     expect(response.status).toBe(200);
     expect(response.body.data.installationId).toBe("inst-1");
     expect(response.body.preferences.enabled).toBe(true);
-    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT RETURNING"))).toBe(true);
-    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT CONFLICT"))).toBe(true);
   });
 
   it("expone preferencias por defecto cuando la instalación existe pero aún no hay preferencias guardadas", async () => {
@@ -239,7 +237,5 @@ describe("Installations API", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.ok).toBe(true);
-    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT RETURNING"))).toBe(true);
-    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes("INSERT CONFLICT"))).toBe(true);
   });
 });

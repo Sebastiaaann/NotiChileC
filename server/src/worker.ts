@@ -5,7 +5,7 @@ import {
   type LicitacionRecord,
 } from "./chilecompra";
 import { scrapeLicitaciones, scrapedToRecord } from "./scraper";
-import { query, queryResult, db as drizzleDb } from "./db";
+import { getPool, db as drizzleDb } from "./db";
 import { licitacionRegistry } from "./db/schema";
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -29,6 +29,25 @@ import {
 } from "./observability/metrics";
 import { workerLogger } from "./observability/logger";
 import { captureException } from "./observability/sentry";
+
+/**
+ * Local query helpers replacing legacy db.ts exports.
+ * Uses getPool() to run raw SQL — the same underlying pool as the Drizzle `db` instance.
+ */
+async function execQuery<T extends Record<string, unknown>>(
+  text: string,
+  params: unknown[] = []
+): Promise<T[]> {
+  const result = await getPool().query<T>(text, params);
+  return result.rows;
+}
+
+async function execQueryResult<T extends Record<string, unknown>>(
+  text: string,
+  params: unknown[] = []
+) {
+  return getPool().query<T>(text, params);
+}
 
 const DETAIL_DELAY_MS = 300;
 const EVENT_TYPE_NEW_LICITACION = "new_licitacion";
@@ -79,8 +98,8 @@ export interface WorkerResult {
 
 interface WorkerDependencies {
   db: NodePgDatabase<typeof schema>;
-  query: typeof query;
-  queryResult: typeof queryResult;
+  query: typeof execQuery;
+  queryResult: typeof execQueryResult;
   pushProvider: PushProvider;
   now: () => Date;
   sleep: (ms: number) => Promise<void>;
@@ -280,8 +299,8 @@ function isInstallationAllowed(row: DeviceInstallationRow): boolean {
 function createDefaultDependencies(): WorkerDependencies {
   return {
     db: drizzleDb as unknown as NodePgDatabase<typeof schema>,
-    query,
-    queryResult,
+    query: execQuery,
+    queryResult: execQueryResult,
     pushProvider: DEFAULT_PUSH_PROVIDER,
     now: () => new Date(),
     sleep,
