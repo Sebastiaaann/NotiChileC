@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
-import { queryOne } from "../db";
+import { db } from "../db";
+import { sql } from "drizzle-orm";
 
 const JWT_SECRET =
   process.env.JWT_SECRET || "notichilec-dev-secret-change-in-prod";
@@ -41,10 +42,10 @@ export async function requireVerifiedEmail(
     // Attach user to request for downstream handlers
     (req as unknown as Record<string, unknown>).user = decoded;
 
-    const row = await queryOne<{ email_verified_at: string | null }>(
-      "SELECT email_verified_at FROM users WHERE id = $1",
-      [decoded.id],
+    const result = await db.execute<{ email_verified_at: string | null }>(
+      sql`SELECT email_verified_at FROM users WHERE id = ${decoded.id}`
     );
+    const row = result.rows[0] ?? null;
 
     if (!row || !row.email_verified_at) {
       res.status(403).json({

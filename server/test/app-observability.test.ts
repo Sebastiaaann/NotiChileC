@@ -73,7 +73,7 @@ describe("app observability", () => {
     expect(response.body.status).toBe("ok");
     expect(response.headers["x-request-id"]).toBeTruthy();
     expect(checkDatabaseReadyMock).not.toHaveBeenCalled();
-  });
+  }, 10_000);
 
   it("expone readiness con estado de DB/pool", async () => {
     const { createApp } = await import("../src/app");

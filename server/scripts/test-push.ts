@@ -6,13 +6,13 @@
  */
 import "dotenv/config";
 import { createExpoPushProvider } from "../src/push";
-import { closePool, query } from "../src/db";
+import { closePool, getPool } from "../src/db";
 import type { PushNotificationInput } from "../src/push-provider";
 
 async function main() {
   console.log("=== Test de Push Notification ===\n");
 
-  const installations = await query<{
+  const { rows: installations } = await getPool().query<{
     installation_id: string;
     push_token: string;
   }>(

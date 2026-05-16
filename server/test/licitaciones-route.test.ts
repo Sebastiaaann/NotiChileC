@@ -2,11 +2,12 @@ import { Buffer } from "node:buffer";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { queryMock, queryOneMock, checkDatabaseReadyMock, getPoolStatsMock } = vi.hoisted(() => ({
+const { queryMock, queryOneMock, checkDatabaseReadyMock, getPoolStatsMock, poolQueryMock } = vi.hoisted(() => ({
   queryMock: vi.fn(),
   queryOneMock: vi.fn(),
   checkDatabaseReadyMock: vi.fn(),
   getPoolStatsMock: vi.fn(),
+  poolQueryMock: vi.fn(),
 }));
 
 const { ensureRuntimeSchemaMock } = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ vi.mock("../src/db", () => ({
   query: queryMock,
   queryOne: queryOneMock,
   queryResult: vi.fn(),
+  getPool: vi.fn(() => ({ query: poolQueryMock })),
   checkDatabaseReady: checkDatabaseReadyMock,
   getPoolStats: getPoolStatsMock,
   db: {
@@ -81,58 +83,64 @@ describe("GET /api/licitaciones", () => {
   });
 
   it("arma query cursor-based con ventana hot por defecto", async () => {
-    queryMock.mockResolvedValue([
-      {
-        id: "2",
-        codigo_externo: "222",
-        nombre: "Licitación 2",
-        organismo_nombre: "MOP",
-        tipo: "L1",
-        monto_estimado: "5000",
-        monto_label: null,
-        moneda: "CLP",
-        fecha_publicacion: "2026-01-02T00:00:00.000Z",
-        fecha_cierre: "2026-01-03T00:00:00.000Z",
-        estado: "Publicada",
-        url: "https://example.com/2",
-        region: "RM",
-        categoria: "General",
-        source_rank: 2,
-        created_at: "2026-01-02T00:00:00.000Z",
-      },
-      {
-        id: "1",
-        codigo_externo: "111",
-        nombre: "Licitación 1",
-        organismo_nombre: "MOP",
-        tipo: "L1",
-        monto_estimado: "4000",
-        monto_label: null,
-        moneda: "CLP",
-        fecha_publicacion: "2026-01-01T00:00:00.000Z",
-        fecha_cierre: "2026-01-02T00:00:00.000Z",
-        estado: "Publicada",
-        url: "https://example.com/1",
-        region: "RM",
-        categoria: "General",
-        source_rank: 5,
-        created_at: "2026-01-01T00:00:00.000Z",
-      },
-    ]);
+    poolQueryMock.mockResolvedValue({
+      rows: [
+        {
+          id: "2",
+          codigo_externo: "222",
+          nombre: "Licitación 2",
+          organismo_nombre: "MOP",
+          tipo: "L1",
+          monto_estimado: "5000",
+          monto_label: null,
+          moneda: "CLP",
+          fecha_publicacion: "2026-01-02T00:00:00.000Z",
+          fecha_cierre: "2026-01-03T00:00:00.000Z",
+          estado: "Publicada",
+          url: "https://example.com/2",
+          region: "RM",
+          categoria: "General",
+          source_rank: 2,
+          created_at: "2026-01-02T00:00:00.000Z",
+        },
+        {
+          id: "1",
+          codigo_externo: "111",
+          nombre: "Licitación 1",
+          organismo_nombre: "MOP",
+          tipo: "L1",
+          monto_estimado: "4000",
+          monto_label: null,
+          moneda: "CLP",
+          fecha_publicacion: "2026-01-01T00:00:00.000Z",
+          fecha_cierre: "2026-01-02T00:00:00.000Z",
+          estado: "Publicada",
+          url: "https://example.com/1",
+          region: "RM",
+          categoria: "General",
+          source_rank: 5,
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      rowCount: 2,
+      command: "",
+      oid: 0,
+      fields: [],
+    });
 
     const app = createApp();
     const response = await request(app).get("/api/licitaciones?limit=1");
 
     expect(response.status).toBe(200);
-    expect(queryMock).toHaveBeenCalledTimes(1);
-    expect(queryMock.mock.calls[0][0]).toContain(
+    expect(poolQueryMock).toHaveBeenCalledTimes(1);
+    expect(poolQueryMock.mock.calls[0][0]).toContain(
       "WHERE COALESCE(fecha_publicacion, created_at) >= $1"
     );
-    expect(queryMock.mock.calls[0][0]).toContain(
+    expect(poolQueryMock.mock.calls[0][0]).toContain(
       "ORDER BY COALESCE(fecha_publicacion, created_at) DESC, COALESCE(-source_rank, -2147483647) DESC, created_at DESC, id DESC"
     );
-    expect(queryMock.mock.calls[0][1]).toHaveLength(2);
-    expect(queryMock.mock.calls[0][1][1]).toBe(2);
+    expect(poolQueryMock.mock.calls[0][1]).toHaveLength(2);
+    expect(poolQueryMock.mock.calls[0][1][1]).toBe(2);
     expect(response.body.data).toHaveLength(1);
     expect(response.body.pageInfo.hasMore).toBe(true);
     expect(response.body.pageInfo.nextCursor).toBeTruthy();
@@ -140,7 +148,7 @@ describe("GET /api/licitaciones", () => {
   });
 
   it("combina filtros y cursor de últimas publicadas manteniendo orden estable", async () => {
-    queryMock.mockResolvedValue([]);
+    poolQueryMock.mockResolvedValue({ rows: [], rowCount: 0, command: "", oid: 0, fields: [] });
     const cursor = Buffer.from(
       JSON.stringify({
         mode: "latest_published",
@@ -158,12 +166,12 @@ describe("GET /api/licitaciones", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(queryMock.mock.calls[0][0]).toContain("rubro_code LIKE $2");
-    expect(queryMock.mock.calls[0][0]).toContain("tipo = $3");
-    expect(queryMock.mock.calls[0][0]).toContain(
+    expect(poolQueryMock.mock.calls[0][0]).toContain("rubro_code LIKE $2");
+    expect(poolQueryMock.mock.calls[0][0]).toContain("tipo = $3");
+    expect(poolQueryMock.mock.calls[0][0]).toContain(
       "COALESCE(-source_rank, -2147483647)"
     );
-    expect(queryMock.mock.calls[0][1].slice(1)).toEqual([
+    expect(poolQueryMock.mock.calls[0][1].slice(1)).toEqual([
       "45%",
       "L1",
       "2026-01-02T00:00:00.000Z",
@@ -175,7 +183,7 @@ describe("GET /api/licitaciones", () => {
   });
 
   it("agrega filtros por región y monto excluyendo montos nulos", async () => {
-    queryMock.mockResolvedValue([]);
+    poolQueryMock.mockResolvedValue({ rows: [], rowCount: 0, command: "", oid: 0, fields: [] });
 
     const app = createApp();
     const response = await request(app).get(
@@ -183,19 +191,19 @@ describe("GET /api/licitaciones", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(queryMock.mock.calls[0][0]).toContain("region = $2");
-    expect(queryMock.mock.calls[0][0]).toContain(
+    expect(poolQueryMock.mock.calls[0][0]).toContain("region = $2");
+    expect(poolQueryMock.mock.calls[0][0]).toContain(
       "monto_estimado IS NOT NULL AND monto_estimado >= $3"
     );
-    expect(queryMock.mock.calls[0][0]).toContain(
+    expect(poolQueryMock.mock.calls[0][0]).toContain(
       "monto_estimado IS NOT NULL AND monto_estimado <= $4"
     );
-    expect(queryMock.mock.calls[0][1][4]).toBe(21);
+    expect(poolQueryMock.mock.calls[0][1][4]).toBe(21);
     expect(response.body.pageInfo.windowDays).toBe(30);
   });
 
   it("ordena por prontas a cerrar usando fecha_cierre futura y cursor consistente", async () => {
-    queryMock.mockResolvedValue([]);
+    poolQueryMock.mockResolvedValue({ rows: [], rowCount: 0, command: "", oid: 0, fields: [] });
     const cursor = Buffer.from(
       JSON.stringify({
         mode: "closing_soon",
@@ -214,11 +222,11 @@ describe("GET /api/licitaciones", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(queryMock.mock.calls[0][0]).toContain(
+    expect(poolQueryMock.mock.calls[0][0]).toContain(
       "THEN -EXTRACT(EPOCH FROM fecha_cierre) * 1000"
     );
-    expect(queryMock.mock.calls[0][0]).toContain("COALESCE(fecha_publicacion, created_at) DESC");
-    expect(queryMock.mock.calls[0][1].slice(-6)).toEqual([
+    expect(poolQueryMock.mock.calls[0][0]).toContain("COALESCE(fecha_publicacion, created_at) DESC");
+    expect(poolQueryMock.mock.calls[0][1].slice(-6)).toEqual([
       1,
       -1760000000000,
       "2026-01-05T00:00:00.000Z",
@@ -229,7 +237,7 @@ describe("GET /api/licitaciones", () => {
   });
 
   it("ordena por relevancia con bucket abierto y monto descendente", async () => {
-    queryMock.mockResolvedValue([]);
+    poolQueryMock.mockResolvedValue({ rows: [], rowCount: 0, command: "", oid: 0, fields: [] });
     const cursor = Buffer.from(
       JSON.stringify({
         mode: "most_relevant",
@@ -248,10 +256,10 @@ describe("GET /api/licitaciones", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(queryMock.mock.calls[0][0]).toContain(
+    expect(poolQueryMock.mock.calls[0][0]).toContain(
       "COALESCE(monto_estimado, 0) DESC"
     );
-    expect(queryMock.mock.calls[0][1].slice(-6)).toEqual([
+    expect(poolQueryMock.mock.calls[0][1].slice(-6)).toEqual([
       1,
       250000000,
       "2026-01-05T00:00:00.000Z",
@@ -293,13 +301,16 @@ describe("GET /api/licitaciones", () => {
   });
 
   it("lista regiones disponibles para la UX del feed dentro de la ventana hot", async () => {
-    queryMock.mockResolvedValue([{ region: "RM" }, { region: "Valparaíso" }]);
+    poolQueryMock.mockResolvedValue({
+      rows: [{ region: "RM" }, { region: "Valparaíso" }],
+      rowCount: 2, command: "", oid: 0, fields: [],
+    });
 
     const app = createApp();
     const response = await request(app).get("/api/licitaciones/regions?windowDays=45");
 
     expect(response.status).toBe(200);
-    expect(queryMock).toHaveBeenCalledWith(
+    expect(poolQueryMock).toHaveBeenCalledWith(
       expect.stringContaining("SELECT DISTINCT region"),
       [expect.any(String)]
     );
